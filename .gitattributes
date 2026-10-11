@@ -1,7 +1,0 @@
-* text=auto
-*.bin binary
-*.gif binary
-*.png binary
-*.uf2 binary
-*.hex text eol=lf
-*.gbf binary

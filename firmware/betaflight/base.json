@@ -1,7 +1,0 @@
-{
-  "repository": "https://github.com/betaflight/betaflight.git",
-  "tag": "3.5.7",
-  "commit": "e9130527cd644d549ba5f455cf053d086fa75041",
-  "patch": "drl.patch",
-  "apply": "git apply --check drl.patch && git apply drl.patch"
-}
