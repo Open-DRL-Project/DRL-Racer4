@@ -19,10 +19,10 @@
 
 //DAN MSGERS
 // MAX MSG SIZE: 2080
-// CTM USES SERCOM4
-// LEDC USES SERCOM0
-// IRC USES SERCOM0
-// MMC USES SERCOM1
+// CTM USES SERCOM4, adr: 0x20011dac
+// LEDC USES SERCOM0, adr: 0x20011e00
+// IRC USES SERCOM0, adr: 0x20011e24
+// MMC USES SERCOM1, adr: 0x20011ddc
 
 
 // | Software object |  SERCOM |         Base |   Baud |
@@ -66,6 +66,17 @@
 // 2001202C, POLL FC ARM
 // 200120A4, EC BLACKBOX
 // 20011FCC, StorageDefaultsSet
+
+
+enum DRONE_MODE {
+  UNKNOWN,
+  DISARMED,
+  ARMED,
+  KILLED,
+  REVIVED,
+  FAILSAFED
+};
+
 
 // FLASH OBJECTS: (Shouldn't use this in newer versions)
 FlashStorage(IRCUpdateRate, int);
@@ -167,6 +178,23 @@ int g_OSDDiagWarnOveride;
 int g_OSDDisplayVolts;
 int g_OSDFontApplied;
 
+int g_LastOSDUpdateTime = 0;
+int g_OSDNeedToDisplayWarnings = 0;
+
+
+int g_LastDroneStateUpdateTime = 0;
+int g_LastHeartBeatTime = 0;
+int g_HeartBeatCount = 0;
+
+bool g_userButtonDown = 0;
+int g_userButtonDownAt = 0;
+
+int g_LastIRCUpdateTime = 0;
+int g_LastIRCUpdateTimeCheck = 0;
+
+
+int g_diagnosticsChecked = 0;
+int g_LastDiagnosticsUpdateTime = 0;
 
 uint8_t g_ResetReason;
 
@@ -336,7 +364,7 @@ void OSDInit() {
   osd.clearScreen();
 }
 
-
+//Done
 void GetResetReason(void) {
   uint8_t rcause = RSTC->RCAUSE.reg;
   
@@ -521,32 +549,383 @@ void DiagnosticsInit() {
 
 //STUB
 void setup() {
-  FUN_00009a38();
+  FUN_00009a38(); //STUB
   Serial.println("<EC STARTUP>");
-  SetStorageDefaults();
-  FlashInit();
+  SetStorageDefaults(); //STUB
+  FlashInit(); //STUB
   //ADCInit();
-  GetSerialNumber();
-  OSDInit(); 
-  TelemetryInit();
-  IRInit();
+  GetSerialNumber(); //Done
+  OSDInit(); //Done
+  TelemetryInit(); //Done
+  IRInit(); //Done
   //ECCX08Init();
   //FUN_00006d04();
   //CameraInit();
-  DiagnosticsInit();
-  ECInfo();
+  DiagnosticsInit(); //Done
+  ECInfo(); //Done
+}
+
+//STUB
+void UpdateDroneState() {
+  /*
+  if ((((*DAT_0000c820 != '\0') && (*DAT_0000c824 == '\0')) && (*DAT_0000c828 != '\0')) && (16 < *HeartBeatCount)) {
+    *DAT_0000c824 = '\x01';
+    FUN_00006558();
+  }
+  */
+  int lastUpdateTime = g_LastDroneStateUpdateTime;
+  int droneMode = g_DroneMode;
+  if (lastUpdateTime == 0) {
+    g_LastDroneStateUpdateTime = micros();
+  } else {
+    int CurrentTime = micros();
+    if (1000000 < (CurrentTime - g_LastHeartBeatTime)) {
+      g_LastHeartBeatTime = CurrentTime;
+      g_HeartBeatCount++;
+      digitalWrite(48,digitalRead(LED_PIN));
+      if (droneMode == FAILSAFED) {
+        //FailsafeDrone();
+      } else if (droneMode == REVIVED) {
+        tone(BUZZER_PIN,4000,100);
+        //ReviveSystem();
+      } else if (droneMode == KILLED) {
+        //KillSystem();
+      }
+    }
+  }
+  if (g_PollFCARM != 0) {
+    /*
+    uVar8 = *DAT_0000c84c;
+    if ((uVar8 & 0xfffffbff) == 1) {
+      if (*DAT_0000c850 != '\0') goto LAB_0000c704;
+      *DAT_0000c850 = '\x01';
+      uVar6 = 2;
+    }
+    else if (uVar8 == 0x200) {
+      if (*DAT_0000c850 == '\0') goto LAB_0000c704;
+      *DAT_0000c850 = '\0';
+      uVar6 = 5;
+    }
+    else {
+      if ((uVar8 != 0) || (*DAT_0000c850 == '\0')) goto LAB_0000c704;
+      *DAT_0000c850 = '\0';
+      uVar6 = 1;
+    }
+    SetDroneMode(uVar6);
+    */
+  }
+  if (droneMode != ARMED) {
+    int CurrentTime = millis();
+    if (digitalRead(USER_BUTTON) && !g_userButtonDown) {
+      g_userButtonDown = true;
+      g_userButtonDownAt = CurrentTime;
+    } else if (g_userButtonDown && !digitalRead(USER_BUTTON) && 200 < (CurrentTime - g_userButtonDownAt)) { // The time here needs to be checked, I just guessed.
+      g_userButtonDown = false;
+      //LEDColorAdvance();
+    }
+  }
+  /*
+  puVar2 = DAT_0000c85c;
+  uVar8 = millis();
+  if (*puVar2 < uVar8) {
+    digitalWrite(18,0);
+    *puVar2 = 0xffffffff;
+  }
+  */
+  if (g_PollRcForColor != 0 && droneMode == DISARMED) {
+    /*
+    if (*(ushort *)(DAT_0000c864 + 10) < 1001) {
+      if ((*(ushort *)(DAT_0000c864 + 10) != 1000) && (*DAT_0000c868 != '\0')) {
+        *DAT_0000c868 = '\0';
+      }
+    } else if (*DAT_0000c868 == '\0') {
+      *DAT_0000c868 = '\x01';
+      FUN_0000a714(uVar6);
+      LEDColorAdvance();
+    }
+    */
+  }
+  /*  
+  DroneMode = DAT_0000c870;
+  FUN_00017c8c(auStack_28,DAT_0000c874);
+  cVar1 = *DroneMode;
+  if (cVar1 == '\x01') {
+    iVar5 = FUN_00016776(DAT_0000c878);
+    if (0 < iVar5) {
+      FUN_000164d4(auStack_1c,DAT_0000c878);
+      FUN_00017d26(auStack_28,auStack_1c);
+      FUN_00017c08(auStack_1c);
+      FUN_00015d00(DAT_0000c878,auStack_28);
+      *DroneMode = 2;
+      FUN_00017d12(auStack_1c,auStack_28);
+      RunCommands(auStack_1c);
+      FUN_00017c08(auStack_1c);
+    }
+  }
+  else {
+    if (cVar1 == 0) {
+      print(DAT_0000c878,DAT_0000c87c);
+    }
+    *DroneMode = cVar1 == 0;
+  }
+  *DAT_0000c888 = *VXTChannelNumber;
+  FUN_00017c08(auStack_28);
+  */
+}
+
+//STUB
+void IRCUpdate() {
+  int uVar1;
+
+  int CurrentTime = millis();
+  int LastUpdatedTime = g_LastIRCUpdateTime;
+  int LastTimeCheck = g_LastIRCUpdateTimeCheck;
+  g_LastIRCUpdateTimeCheck = CurrentTime;
+  if (LastTimeCheck < LastUpdatedTime) {
+    return; // Something broke
+  }
+  if (g_IRCUpdateRate <= (LastTimeCheck - LastUpdatedTime)) {
+    g_LastIRCUpdateTime = CurrentTime;
+    if (g_IRCDisabled) {
+      uVar1 = g_VTXChannelNumber;
+    } else {
+      uVar1 = 0;
+    }
+    /*
+    memset(auStack_834,0, 2090);
+    local_832 = 0x60;
+    local_830 = *DAT_0000761c;
+    local_831 = local_830 & 0xf ^ 0x70;
+    local_82f = uVar1;
+    SendDANmsgToIRC(auStack_834,1);
+    return;
+    */
+  }
+}
+
+//STUB
+void DiagnosticsTimoutChecks() {
+  if (g_diagnosticsChecked == 0) {
+    int CurrentTime = millis();
+    if (g_DiagnosticsPreChecktime <= (CurrentTime - g_LastDiagnosticsUpdateTime)) {
+      Serial.println("Diagnostics: Reached Pre-Check Time");
+      g_LastDiagnosticsUpdateTime = CurrentTime;
+      /*
+      iVar4 = FUN_000066c4(1,0);
+      if (iVar4 == 0) {
+        g_DiagnosticsInitCheckTime = 0;
+      }
+      */
+    }
+    if (g_DiagnosticsInitCheckTime <= (CurrentTime - g_DiagnosticsStartUpTime)) {
+      Serial.println("Diagnostics: Reached Initialization Check Time");
+      g_diagnosticsChecked = 1;
+      g_DiagnosticsStartUpTime = CurrentTime;
+      g_diagnosticsChecked = 1;
+      //FUN_000066c4(1,1);
+    }
+  }
+}
+
+void UpdateOSD() {
+  if (g_OSDDisabled != 0) {
+    return;
+  }
+  char TextBuffer [20];
+  int CurrentTime = millis();
+  int OSDDebugNumber = g_OSDDebugMode;
+  if ((CurrentTime - g_LastOSDUpdateTime) < g_OSDUpdateRate) {
+    return;
+  }
+  g_LastOSDUpdateTime = CurrentTime;
+
+  memset(TextBuffer,0,20);
+
+  if ((((*OSDDebugNumber != 1) && (g_DroneMode != ARMED)) && (g_OSDNeedToDisplayWarnings != 0)) && (g_OSDDiagWarnOveride == 0)) {
+    Serial.println("OSD: Displaying Warnings");
+    g_OSDNeedToDisplayWarnings = 0;
+    memset(TextBuffer,0,20);
+    /*
+    snprintf(TextBuffer,20,"%s",DAT_0000895c);
+    CurrentTime = FUN_000198bc(DAT_0000895c,"NOT OK");
+    if (CurrentTime == 0) {
+      uVar10 = 3;
+    }
+    else {
+      uVar10 = 15;
+    }
+    FUN_000086e0(uVar10,0,6,TextBuffer);
+    */
+  }
+  /*
+
+  if (*DAT_00008964 != *OSDDebugNumber) {
+    *DAT_00008964 = *OSDDebugNumber;
+    osd.clearScreen();
+  }
+
+  pbVar4 = DAT_00008974;
+  piVar3 = DAT_00008970;
+  if ((*DAT_00008968 == '\0') && ((uint)*DAT_00008974 <= (*HeartBeatCount >> 1) - *DAT_00008970)) {
+    *DAT_00008968 = '\x01';
+    *piVar3 = 0;
+    *pbVar4 = 0;
+    osd.clearScreen();
+  }
+  pfVar5 = DAT_0000897c;
+  int OSDVoltage = *DAT_00008978 + g_OSDLiPoOffset;
+  *DAT_0000897c = OSDVoltage;
+  */
+  memset(TextBuffer,0,20);
+  if (g_OSDDisplayVolts == '\0') {
+  }
+  else {
+    snprintf(TextBuffer,20,"%.1f  ", (double)OSDVoltage);
+  }
+  osd.print(TextBuffer,0,11,0,0);
+  DisplayeMode = *OSDDebugNumber;
+  if (DisplayeMode != 0) {
+    /*
+    if (DisplayeMode == 2) {
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d ",*VTXChannelNumber);
+      osd.print(TextBuffer,2,0xb,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d ",*DAT_0000899c + 1);
+      osd.print(TextBuffer,6,0xb,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",(int)*DAT_000089a0);
+      osd.print(TextBuffer,15,0xb,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",*DAT_000089a8);
+      uVar11 = 20;
+      uVar10 = OSD;
+      osd.print(TextBuffer,uVar11,0xb,0,0);
+    }
+    else {
+      if (DisplayeMode != 01) goto LAB_00008f0a;
+      memset(TextBuffer,0,20);
+      FUN_00018e9c(*pfVar5);
+      snprintf(TextBuffer,20,"%.1f ");
+      osd.print(TextBuffer,0,0xb,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%s",DAT_00008c84);
+      osd.print(TextBuffer,0,01,0,0);
+      memset(TextBuffer,0,20);
+      puVar6 = DAT_00008c90;
+      snprintf(TextBuffer,20,"%d    ",*HeartBeatCount >> 1);
+      osd.print(TextBuffer,0,10,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",*DAT_00008c94);
+      osd.print(TextBuffer,0,9,0,0);
+      memset(TextBuffer,0,20);
+      fVar12 = (float)VectorSignedToFloat((int)*DAT_00008c98,(byte)(in_fpscr >> 0x16) & 3);
+      FUN_00018e9c(fVar12 / 10.0);
+      snprintf(TextBuffer,20,"%.2f    ");
+      osd.print(TextBuffer,0,8,0,0);
+      memset(TextBuffer,0,20);
+      fVar12 = (float)VectorSignedToFloat((int)*DAT_00008ca0,(byte)(in_fpscr >> 0x16) & 3);
+      FUN_00018e9c(fVar12 / 10.0);
+      snprintf(TextBuffer,20,"%.2f    ");
+      osd.print(TextBuffer,0,7,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",(int)*DAT_00008ca4);
+      osd.print(TextBuffer,0,6,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%u    ",*puVar6);
+      osd.print(TextBuffer,0,2,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%u    ",puVar6[1]);
+      osd.print(TextBuffer,0,3,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%u    ",puVar6[2]);
+      osd.print(TextBuffer,0,4,0,0);
+      memset(TextBuffer,0,20);
+      puVar7 = DAT_00008cac;
+      snprintf(TextBuffer,20,"%d    ",puVar6[3]);
+      osd.print(TextBuffer,0,5,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",*puVar7);
+      osd.print(TextBuffer,6,0xb,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",puVar7[1]);
+      osd.print(TextBuffer,6,10,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",puVar7[2]);
+      osd.print(TextBuffer,6,9,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",puVar7[3]);
+      osd.print(TextBuffer,6,8,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",puVar7[4]);
+      osd.print(TextBuffer,6,7,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",puVar7[5]);
+      osd.print(TextBuffer,6,6,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",puVar7[6]);
+      osd.print(TextBuffer,6,5,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",puVar7[7]);
+      osd.print(TextBuffer,6,4,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ",*DAT_00008f24);
+      osd.print(TextBuffer,6,2,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%s      ",DAT_00008f2c);
+      osd.print(TextBuffer,0xc,2,0,0);
+      memset(TextBuffer,0,20);
+      DisplayeMode = *DAT_00008f30;
+      uVar10 = DAT_00008f34;
+      if (((DisplayeMode == '\0') || (uVar10 = DAT_00008f38, DisplayeMode == '\x01')) ||
+         ((uVar10 = DAT_00008f3c, DisplayeMode == '\x02' ||
+          (((uVar10 = DAT_00008f40, DisplayeMode == '\x03' ||
+            (uVar10 = DAT_00008f44, DisplayeMode == '\x04')) ||
+           (uVar10 = DAT_00008f48, DisplayeMode == '\x05')))))) {
+        FUN_00019926(TextBuffer,uVar10);
+      }
+      osd.print(TextBuffer,0xc,3,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"CTRL: %d      ",*DAT_00008f4c);
+      osd.print(TextBuffer,0xc,4,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"FC: %d      ",*DAT_00008f54);
+      osd.print(TextBuffer,0xc,5,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"CHANNEL: %d      ",VTXChannelNumber);
+      osd.print(TextBuffer,0xc,6,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"RATE: %d      ",*DAT_00008f64 + 1);
+      osd.print(TextBuffer,0xc,7,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"BUTTON: %d      ",*DAT_00008f6c);
+      osd.print(TextBuffer,0xc,8,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"FW: %d,%d,%d     ",0x15,*DAT_00008f74,*DAT_00008f7c);
+      osd.print(TextBuffer,0xc,9,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"RSSI: %d      ",(int)*DAT_00008f80);
+      osd.print(TextBuffer,0xc,10,0,0);
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"HEALTH: %d      ",*DAT_00008f88);
+      uVar11 = 0xc;
+      uVar10 = OSD;
+      osd.print(TextBuffer,uVar11,0xb,0,0);
+    }
+    */
+  }
 }
 
 //STUB
 void loop()
 {
-  //UpdateDroneState();
-  //UpdateOSD();
-  //IRCUpdate();
+  UpdateDroneState(); //STUB
+  UpdateOSD(); //STUB
+  IRCUpdate(); //STUB
   //UpdateTelem();
   //FUN_00004660();
   //FUN_00009cc8();
-  //DiagnosticsTimoutChecks();
+  DiagnosticsTimoutChecks(); //STUB
   //FUN_00007280();
   //FUN_00007bc8();;
 }
