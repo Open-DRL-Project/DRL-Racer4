@@ -77,6 +77,12 @@ enum DRONE_MODE {
   FAILSAFED
 };
 
+enum OSD_DISPLAY_MODES {
+  OSD_NONE,
+  OSD_DEBUG,
+  OSD_RACE
+};
+
 
 // FLASH OBJECTS: (Shouldn't use this in newer versions)
 FlashStorage(IRCUpdateRate, int);
@@ -144,59 +150,57 @@ void SERCOM4_3_Handler() {
 }
 
 // Globals:
+// OSD ----------------------------------
 Max7456 osd;
-
-
-int g_PollFCARM;
-int g_SDDisabled;
-int g_TelemDisabled;
+int g_OSDDebugMode;
+int g_OSDUpdateRate;
 int g_OSDDisabled;
+int g_OSDLiPoOffset;
+int g_OSDDiagWarnOveride;
+int g_OSDDisplayVolts;
+int g_OSDFontApplied;
+int g_LastOSDUpdateTime = 0;
+int g_OSDNeedToDisplayWarnings = 0;
+int g_lastOSDDebugMode = 0;
+
+// IRC
 int g_IRCDisabled;
-int g_PollRcForColor;
-int g_AirrMode;
-int g_PDBVaraint;
+int g_IRCUpdateRate;
+int g_LastIRCUpdateTime = 0;
+int g_LastIRCUpdateTimeCheck = 0;
 
-
+// Telem
+int g_TelemDisabled;
 int g_TelemUpdateRate;
 int g_TelemBlackboxMode;
 int g_TelemWhileDisarmed;
 int g_TelemUseFcValues;
 
-int g_IRCUpdateRate;
-
-int g_DroneMode = 0;
-int g_VTXChannelNumber = 0;
-int g_OSDDebugMode;
-int g_OSDUpdateRate;
-int g_ECBlackBoxMode;
-int g_SystemOverrideChannel;
-
+// Diagnostics
 int g_DiagnosticsStartUpTime;
-
-int g_OSDLiPoOffset;
-int g_OSDDiagWarnOveride;
-int g_OSDDisplayVolts;
-int g_OSDFontApplied;
-
-int g_LastOSDUpdateTime = 0;
-int g_OSDNeedToDisplayWarnings = 0;
-
-
-int g_LastDroneStateUpdateTime = 0;
-int g_LastHeartBeatTime = 0;
-int g_HeartBeatCount = 0;
-
-bool g_userButtonDown = 0;
-int g_userButtonDownAt = 0;
-
-int g_LastIRCUpdateTime = 0;
-int g_LastIRCUpdateTimeCheck = 0;
-
-
 int g_diagnosticsChecked = 0;
 int g_LastDiagnosticsUpdateTime = 0;
 
+// System
+int g_SDDisabled;
+int g_AirrMode;
+int g_PDBVaraint;
+int g_DroneMode = 0;
+int g_VTXChannelNumber = 0;
+int g_ECBlackBoxMode;
+int g_SystemOverrideChannel;
+int g_LastHeartBeatTime = 0;
 uint8_t g_ResetReason;
+int g_LastDroneStateUpdateTime = 0;
+int g_HeartBeatCount = 0;
+bool g_userButtonDown = 0;
+int g_userButtonDownAt = 0;
+
+// FC polls
+int g_PollFCARM;
+int g_PollRcForColor;
+
+
 
 //STUB: NEEDS TO CREATE DAN MSGS AND FIX SERCOMS
 void FUN_00009a38() {
@@ -568,7 +572,7 @@ void setup() {
 //STUB
 void UpdateDroneState() {
   /*
-  if ((((*DAT_0000c820 != '\0') && (*DAT_0000c824 == '\0')) && (*DAT_0000c828 != '\0')) && (16 < *HeartBeatCount)) {
+  if ((((*DAT_0000c820 != '\0') && (*DAT_0000c824 == '\0')) && (*DAT_0000c828 != '\0')) && (16 < g_HeartBeatCount)) {
     *DAT_0000c824 = '\x01';
     FUN_00006558();
   }
@@ -579,10 +583,10 @@ void UpdateDroneState() {
     g_LastDroneStateUpdateTime = micros();
   } else {
     int CurrentTime = micros();
-    if (1000000 < (CurrentTime - g_LastHeartBeatTime)) {
+    if (500000 < (CurrentTime - g_LastHeartBeatTime)) {
       g_LastHeartBeatTime = CurrentTime;
       g_HeartBeatCount++;
-      digitalWrite(48,digitalRead(LED_PIN));
+      digitalWrite(LED_PIN, digitalRead(LED_PIN));
       if (droneMode == FAILSAFED) {
         //FailsafeDrone();
       } else if (droneMode == REVIVED) {
@@ -698,7 +702,6 @@ void IRCUpdate() {
     local_831 = local_830 & 0xf ^ 0x70;
     local_82f = uVar1;
     SendDANmsgToIRC(auStack_834,1);
-    return;
     */
   }
 }
@@ -747,8 +750,8 @@ void UpdateOSD() {
     memset(TextBuffer,0,20);
     /*
     snprintf(TextBuffer,20,"%s",DAT_0000895c);
-    CurrentTime = FUN_000198bc(DAT_0000895c,"NOT OK");
-    if (CurrentTime == 0) {
+    int res = FUN_000198bc(DAT_0000895c,"NOT OK");
+    if (res == 0) {
       uVar10 = 3;
     }
     else {
@@ -757,16 +760,16 @@ void UpdateOSD() {
     FUN_000086e0(uVar10,0,6,TextBuffer);
     */
   }
-  /*
 
-  if (*DAT_00008964 != *OSDDebugNumber) {
-    *DAT_00008964 = *OSDDebugNumber;
+  if (g_lastOSDDebugMode != g_OSDDebugMode) {
+    g_lastOSDDebugMode = g_OSDDebugMode;
     osd.clearScreen();
   }
 
+  /*
   pbVar4 = DAT_00008974;
   piVar3 = DAT_00008970;
-  if ((*DAT_00008968 == '\0') && ((uint)*DAT_00008974 <= (*HeartBeatCount >> 1) - *DAT_00008970)) {
+  if ((*DAT_00008968 == '\0') && ((uint)*DAT_00008974 <= (g_HeartBeatCount >> 1) - *DAT_00008970)) {
     *DAT_00008968 = '\x01';
     *piVar3 = 0;
     *pbVar4 = 0;
@@ -777,55 +780,56 @@ void UpdateOSD() {
   *DAT_0000897c = OSDVoltage;
   */
   memset(TextBuffer,0,20);
-  if (g_OSDDisplayVolts == '\0') {
-  }
-  else {
+  if (g_OSDDisplayVolts == 1) {
     snprintf(TextBuffer,20,"%.1f  ", (double)OSDVoltage);
   }
   osd.print(TextBuffer,0,11,0,0);
-  DisplayeMode = *OSDDebugNumber;
-  if (DisplayeMode != 0) {
-    /*
-    if (DisplayeMode == 2) {
+  DisplayMode = g_OSDDebugMode;
+  if (DisplayMode != OSD_NONE) {
+    
+    if (DisplayMode == OSD_RACE) {
       memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d ",*VTXChannelNumber);
-      osd.print(TextBuffer,2,0xb,0,0);
+      snprintf(TextBuffer,20,"%d ", g_VTXChannelNumber);
+      osd.print(TextBuffer,2,11,0,0);
       memset(TextBuffer,0,20);
+      /*
       snprintf(TextBuffer,20,"%d ",*DAT_0000899c + 1);
-      osd.print(TextBuffer,6,0xb,0,0);
+      osd.print(TextBuffer,6,11,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%d    ",(int)*DAT_000089a0);
-      osd.print(TextBuffer,15,0xb,0,0);
+      osd.print(TextBuffer,15,11,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%d    ",*DAT_000089a8);
-      uVar11 = 20;
-      uVar10 = OSD;
-      osd.print(TextBuffer,uVar11,0xb,0,0);
-    }
-    else {
-      if (DisplayeMode != 01) goto LAB_00008f0a;
+      osd.print(TextBuffer,20,11,0,0);
+      */
+    } else {
+      if (DisplayMode != OSD_DEBUG) return;
+      
       memset(TextBuffer,0,20);
+      /*
       FUN_00018e9c(*pfVar5);
-      snprintf(TextBuffer,20,"%.1f ");
-      osd.print(TextBuffer,0,0xb,0,0);
+      snprintf(TextBuffer,20,"%.1f " pfVar5);
+      osd.print(TextBuffer,0,11,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%s",DAT_00008c84);
       osd.print(TextBuffer,0,01,0,0);
-      memset(TextBuffer,0,20);
       puVar6 = DAT_00008c90;
-      snprintf(TextBuffer,20,"%d    ",*HeartBeatCount >> 1);
+      */
+      memset(TextBuffer,0,20);
+      snprintf(TextBuffer,20,"%d    ", g_HeartBeatCount >> 1); // divides by 2 to get seconds
       osd.print(TextBuffer,0,10,0,0);
+      /*
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%d    ",*DAT_00008c94);
       osd.print(TextBuffer,0,9,0,0);
       memset(TextBuffer,0,20);
       fVar12 = (float)VectorSignedToFloat((int)*DAT_00008c98,(byte)(in_fpscr >> 0x16) & 3);
-      FUN_00018e9c(fVar12 / 10.0);
+      FUN_00018e9c(fVar12/ 10.0);
       snprintf(TextBuffer,20,"%.2f    ");
       osd.print(TextBuffer,0,8,0,0);
       memset(TextBuffer,0,20);
       fVar12 = (float)VectorSignedToFloat((int)*DAT_00008ca0,(byte)(in_fpscr >> 0x16) & 3);
-      FUN_00018e9c(fVar12 / 10.0);
+      FUN_00018e9c(fVar12/ 10.0);
       snprintf(TextBuffer,20,"%.2f    ");
       osd.print(TextBuffer,0,7,0,0);
       memset(TextBuffer,0,20);
@@ -846,7 +850,7 @@ void UpdateOSD() {
       osd.print(TextBuffer,0,5,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%d    ",*puVar7);
-      osd.print(TextBuffer,6,0xb,0,0);
+      osd.print(TextBuffer,6,11,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%d    ",puVar7[1]);
       osd.print(TextBuffer,6,10,0,0);
@@ -873,46 +877,50 @@ void UpdateOSD() {
       osd.print(TextBuffer,6,2,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%s      ",DAT_00008f2c);
-      osd.print(TextBuffer,0xc,2,0,0);
+      osd.print(TextBuffer,12,2,0,0);
+      */
       memset(TextBuffer,0,20);
-      DisplayeMode = *DAT_00008f30;
-      uVar10 = DAT_00008f34;
-      if (((DisplayeMode == '\0') || (uVar10 = DAT_00008f38, DisplayeMode == '\x01')) ||
-         ((uVar10 = DAT_00008f3c, DisplayeMode == '\x02' ||
-          (((uVar10 = DAT_00008f40, DisplayeMode == '\x03' ||
-            (uVar10 = DAT_00008f44, DisplayeMode == '\x04')) ||
-           (uVar10 = DAT_00008f48, DisplayeMode == '\x05')))))) {
-        FUN_00019926(TextBuffer,uVar10);
+      if (g_DroneMode == DISARMED)
+        strcpy(TextBuffer, "DISARMED");
+      } else if (g_DroneMode == ARMED) {
+        strcpy(TextBuffer, "ARMED");
+      } else if (g_DroneMode == KILLED) {
+        strcpy(TextBuffer, "KILLED");
+      } else if (g_DroneMode == REVIVED) {
+        strcpy(TextBuffer, "REVIVED");
+      } else if (g_DroneMode == FAILSAFED) {
+        strcpy(TextBuffer, "FAILSAFED");
       }
-      osd.print(TextBuffer,0xc,3,0,0);
+      osd.print(TextBuffer,12,3,0,0);
+      /*
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"CTRL: %d      ",*DAT_00008f4c);
-      osd.print(TextBuffer,0xc,4,0,0);
+      osd.print(TextBuffer,12,4,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"FC: %d      ",*DAT_00008f54);
-      osd.print(TextBuffer,0xc,5,0,0);
+      osd.print(TextBuffer,12,5,0,0);
+      */
       memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"CHANNEL: %d      ",VTXChannelNumber);
-      osd.print(TextBuffer,0xc,6,0,0);
+      snprintf(TextBuffer,20,"CHANNEL: %d      ", g_VTXChannelNumber);
+      osd.print(TextBuffer,12,6,0,0);
+      /*
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"RATE: %d      ",*DAT_00008f64 + 1);
-      osd.print(TextBuffer,0xc,7,0,0);
+      osd.print(TextBuffer,12,7,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"BUTTON: %d      ",*DAT_00008f6c);
-      osd.print(TextBuffer,0xc,8,0,0);
+      osd.print(TextBuffer,12,8,0,0);
       memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"FW: %d,%d,%d     ",0x15,*DAT_00008f74,*DAT_00008f7c);
-      osd.print(TextBuffer,0xc,9,0,0);
+      snprintf(TextBuffer,20,"FW: %d,%d,%d     ", 21,*DAT_00008f74,*DAT_00008f7c);
+      osd.print(TextBuffer,12,9,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"RSSI: %d      ",(int)*DAT_00008f80);
-      osd.print(TextBuffer,0xc,10,0,0);
+      osd.print(TextBuffer,12,10,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"HEALTH: %d      ",*DAT_00008f88);
-      uVar11 = 0xc;
-      uVar10 = OSD;
-      osd.print(TextBuffer,uVar11,0xb,0,0);
+      osd.print(TextBuffer,12,11,0,0);
+      */
     }
-    */
   }
 }
 
