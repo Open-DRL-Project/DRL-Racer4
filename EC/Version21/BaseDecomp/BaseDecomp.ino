@@ -15,6 +15,7 @@
 #define BUZZER_PIN 53
 #define LED_PIN 48
 #define USER_BUTTON 11
+#define ADC_CS_PIN 9
 
 
 //DAN MSGERS
@@ -53,7 +54,7 @@
 // 0x00024000 | TelemetryBlackBoxMode | 1         | 0x20011FB4
 // 0x0002A000 | TelemWhileDisarmed    | 1         | 0x20011EDC
 // 0x00054000 | TelemUseFcValues      | 1         | 0x200120BC
-// 0x0004E000 | UNKNOWN5              | 1         | 0x2001205C //Camera Smt?
+// 0x0004E000 | CameraType            | 1         | 0x2001205C //Camera Smt?
 // 0x00052000 | UNKNOWN6              | 1         | 0x20011E7C
 // 0x00034000 | UNKNOWN7              | 1         | 0x20011F9C
 // 0x00050000 | UNKNOWN8              | 1         | 0x20011E64
@@ -104,7 +105,7 @@ FlashStorage(OSDupdateRate, int);
 FlashStorage(OSDFontApplied, int);
 FlashStorage(OSDDebugMode, int);
 FlashStorage(OSDDisplayVolts, int);
-FlashStorage(OSDLiPoOffset, int);
+FlashStorage(OSDLiPoOffset, float);
 FlashStorage(OSDDiagWarnOveride, int);
 FlashStorage(TelemUpdateRate, int);
 FlashStorage(TelemBlackboxMode, int);
@@ -155,7 +156,7 @@ Max7456 osd;
 int g_OSDDebugMode;
 int g_OSDUpdateRate;
 int g_OSDDisabled;
-int g_OSDLiPoOffset;
+float g_OSDLiPoOffset;
 int g_OSDDiagWarnOveride;
 int g_OSDDisplayVolts;
 int g_OSDFontApplied;
@@ -182,6 +183,7 @@ int g_diagnosticsChecked = 0;
 int g_LastDiagnosticsUpdateTime = 0;
 
 // System
+int g_DeltaTime = 0;
 int g_SDDisabled;
 int g_AirrMode;
 int g_PDBVaraint;
@@ -190,6 +192,7 @@ int g_VTXChannelNumber = 0;
 int g_ECBlackBoxMode;
 int g_SystemOverrideChannel;
 int g_LastHeartBeatTime = 0;
+int g_CommandState = 0;
 uint8_t g_ResetReason;
 int g_LastDroneStateUpdateTime = 0;
 int g_HeartBeatCount = 0;
@@ -551,6 +554,7 @@ void DiagnosticsInit() {
   Serial.println("Diagnostics: Initialized");
 }
 
+
 //STUB
 void setup() {
   FUN_00009a38(); //STUB
@@ -569,8 +573,273 @@ void setup() {
   ECInfo(); //Done
 }
 
+void DisableIRC()
+{
+  Serial.println("< IR DISABLE");
+  g_IRCDisabled = 1;
+  return;
+}
+
+void DisableTelem()
+{
+  g_TelemDisabled = 1;
+}
+
+void FailsafeDrone() {
+  //FUN_00007944();
+  DisableTelem();
+  DisableIRC();
+  osd.clearScreen();
+  osd.print("FAILSAFE     ",1,3,0,0);
+}
+
+
+void ReviveSystem() {
+  
+  //FUN_000079d4();
+  digitalWrite(49, LOW);
+  osd.clearScreen();
+  osd.print("REVIVED     ",1,3,0,0);
+}
+
+void KillSystem() {
+  
+  //FUN_0000798c();
+  digitalWrite(49, HIGH);
+  DisableTelem();
+  DisableIRC();
+
+  osd.clearScreen();
+  osd.print("KILLED      ",1,3,0,0);
+}
+
+// yes this allows a buffer overflow
+// yes "we ball"
+void GetSerialInputBuffer(char* Out) {
+  int incomingByte;
+  int index = 0;
+
+  while ((incomingByte = Serial.read()) != -1) {
+    Out[index] = (char)(incomingByte & 0xFF);
+    index++;
+  }
+  Out[index] = '\0'; 
+}
+
+void SetTelemUpdateRate(int rate) {
+  g_TelemUpdateRate = rate;
+  TelemUpdateRate.write(rate);
+}
+
+void SetTelemetryBlackBoxMode(int mode) {
+  g_TelemBlackboxMode = mode;
+  TelemBlackboxMode.write(mode);
+}
+
+void SetTelemWhileDisarmed(int set) {
+  g_TelemWhileDisarmed = set;
+  TelemWhileDisarmed.write(set);
+}
+
+void SetTelemUseFCValues(int set) {
+  g_TelemUseFcValues = set;
+  TelemUseFcValues.write(set);
+}
+
+void SetAirrMode(int mode) {
+  g_AirrMode = mode;
+  airrMode.write(mode);
+}
+
+void SetOSDUpdateRate(int rate) {
+  g_OSDUpdateRate = rate;
+  OSDupdateRate.write(rate);
+}
+
+void SetOSDDebugMode(int mode) {
+  g_OSDDebugMode = mode;
+  OSDDebugMode.write(mode);
+}
+
+void SetOSDLipoOffset(float offset) {
+  g_OSDLiPoOffset = offset;
+  OSDLiPoOffset.write(offset);
+}
+
+void SetIRCUpdateRate(int rate) {
+  g_IRCUpdateRate = rate;
+  IRCUpdateRate.write(rate);
+}
+
+void PollRCForColor(int set) {
+  g_PollRcForColor = set;
+  PollRCforColor.write(set);
+}
+
+void SetPDBVaraint(int var) {
+  g_PDBVaraint = var;
+  PDBvaraint.write(var);
+}
+
+void SetDiagWarnOveride(int overide) {
+  g_OSDDiagWarnOveride = overide;
+  OSDDiagWarnOveride.write(overide);
+}
+
+//STUB
+void RunCommands(char* CommandLineIN) {
+  char CommandLine[1024];
+  char arguments[16][64];
+
+  memset(CommandLine,0,1024);
+  strncpy(CommandLineIN,CommandLine,1023);
+
+  memset(arguments,0,1024);
+
+  char* token = strtok(CommandLine, " ");
+  int index = 0;
+  while (token != NULL) {
+    char* destinationSlot = arguments[index];
+    
+    strncpy(destinationSlot, token, 63);
+    destinationSlot[63] = '\0';
+    
+    token = strtok(NULL, " ");
+    index++;
+  }
+
+  if (0 == strcmp(arguments[0], "set")) {
+
+    if(0 == strcmp(arguments[1], "telemetry_rate")) {
+      Serial.print("> Set Telemetry Update Rate: ");
+      Serial.println(arguments[2]);
+      SetTelemUpdateRate(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "telemetry_blackbox_mode")) {
+      Serial.print("> Set Telemetry Blackbox Mode: ");
+      Serial.println(arguments[2]);
+      SetTelemetryBlackBoxMode(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "telemetry_while_disarmed")) {
+      Serial.print("> Set Telemetry While Disarmed: ");
+      Serial.println(arguments[2]);
+      SetTelemWhileDisarmed(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "telemetry_use_fc_values")) {
+      Serial.print("> Set Telemetry Use FC Values: ");
+      Serial.println(arguments[2]);
+      SetTelemUseFCValues(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "airr_mode")) {
+      Serial.print("> Set AIRR Mode: ");
+      Serial.println(arguments[2]);
+      SetAirrMode(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "osd_rate")) {
+      Serial.print("> Set OSD Update Rate: ");
+      Serial.println(arguments[2]);
+      SetOSDUpdateRate(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "osd_debug")) {
+      Serial.print("> Set OSD Debug Mode: ");
+      Serial.println(arguments[2]);
+      SetOSDDebugMode(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "osd_lipo_offset")) {
+      float Offset = strtof(arguments[2], 0);
+      Offset = roundf(Offset * 10.0f) / 10.0f;
+      if (-10.0 <= Offset <= 10.0) {
+        Serial.print("> Set OSD LiPo Offset: ");
+        Serial.println(arguments[2]);
+        SetOSDLipoOffset(Offset);
+      } else {
+        Serial.println("> Set OSD LiPo Offset: Specified Offset Out Of Bounds! ");
+      }
+      return;
+    }
+    /* ------------------- HP_DRIVE
+    iVar10 = strcmp(CommandLineArg2,DAT_0000b09c);
+    if (iVar10 == 0) {
+      print(DAT_0000b058,DAT_0000b0a0);
+      uVar3 = strtol(auStack_3b0,0,10);
+      FUN_00015dca(DAT_0000b058,uVar3,0x10);
+      FUN_0000aa90(uVar3);
+      return 0;
+    }
+    */
+
+    if (0 == strcmp(arguments[1], "system_channel")) {
+      /*
+      bool Failed = SetSystemChannel(strtol(arguments[2],0,10));
+      if (Failed) {
+        Serial.println("ERROR SETTING SYSTEM OVERRIDE CHANNEL")
+      } else {
+        Serial.print("> Set System Override Channel: ");
+        Serial.println(arguments[2]);
+      }*/
+    }
+
+    if (0 == strcmp(arguments[1], "ir_channel_update_rate")) {
+      Serial.print("> Set IR Channel Update Rate: ");
+      Serial.println(arguments[2]);
+      SetIRCUpdateRate(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "poll_rc_color_toggle")) {
+      Serial.print("> Set Poll RC Color Toggle: ");
+      Serial.println(arguments[2]);
+      PollRCForColor(strtol(arguments[2],0,10));
+      return;
+    }
+
+    if (0 == strcmp(arguments[1], "pdb_variant_b")) {
+      Serial.print("> Set PDB Variant Override: ");
+      Serial.println(arguments[2]);
+      SetPDBVaraint(strtol(arguments[2],0,10));
+      return;
+    }
+    
+    /* type ------ CAMERA TYPE
+    iVar10 = strcmp(CommandLineArg2,DAT_0000b28c);
+    if (iVar10 == 0) {
+      printl(DAT_0000b288,DAT_0000b290);
+      uVar3 = strtol(auStack_3b0,0,10);
+      FUN_0000a098(uVar3);
+      return 0;
+    }*/
+
+    if (0 == strcmp(arguments[1], "diagnostics_override")) {
+      Serial.print("> Set Diagnostics Warnings Override: ");
+      Serial.println(arguments[2]);
+      SetDiagWarnOveride(strtol(arguments[2],0,10));
+      return;
+    }
+
+    Serial.print(" Unknown EC parameter: ");
+    Serial.println(arguments[1]); 
+  } else {
+    //NEEDS THE REST HERE (TODO BEFORE: GET DAN MSGS WORKING)
+  }
+}
+
 //STUB
 void UpdateDroneState() {
+  char CommandLine[1024];
   /*
   if ((((*DAT_0000c820 != '\0') && (*DAT_0000c824 == '\0')) && (*DAT_0000c828 != '\0')) && (16 < g_HeartBeatCount)) {
     *DAT_0000c824 = '\x01';
@@ -583,17 +852,19 @@ void UpdateDroneState() {
     g_LastDroneStateUpdateTime = micros();
   } else {
     int CurrentTime = micros();
+    g_DeltaTime = CurrentTime - g_LastDroneStateUpdateTime;
+    g_LastDroneStateUpdateTime = CurrentTime;
     if (500000 < (CurrentTime - g_LastHeartBeatTime)) {
       g_LastHeartBeatTime = CurrentTime;
       g_HeartBeatCount++;
       digitalWrite(LED_PIN, digitalRead(LED_PIN));
       if (droneMode == FAILSAFED) {
-        //FailsafeDrone();
+        FailsafeDrone();
       } else if (droneMode == REVIVED) {
         tone(BUZZER_PIN,4000,100);
-        //ReviveSystem();
+        ReviveSystem();
       } else if (droneMode == KILLED) {
-        //KillSystem();
+        KillSystem();
       }
     }
   }
@@ -649,29 +920,24 @@ void UpdateDroneState() {
     }
     */
   }
-  /*  
-  DroneMode = DAT_0000c870;
-  FUN_00017c8c(auStack_28,DAT_0000c874);
-  cVar1 = *DroneMode;
-  if (cVar1 == '\x01') {
-    iVar5 = FUN_00016776(DAT_0000c878);
-    if (0 < iVar5) {
-      FUN_000164d4(auStack_1c,DAT_0000c878);
-      FUN_00017d26(auStack_28,auStack_1c);
-      FUN_00017c08(auStack_1c);
-      FUN_00015d00(DAT_0000c878,auStack_28);
-      *DroneMode = 2;
-      FUN_00017d12(auStack_1c,auStack_28);
-      RunCommands(auStack_1c);
-      FUN_00017c08(auStack_1c);
+  
+  //FUN_00017c8c(auStack_28,DAT_0000c874);
+  int CommandState = g_CommandState;
+  if (g_CommandState == 1) {
+    if (0 < Serial.available()) {
+      GetSerialInputBuffer(CommandLine);
+      Serial.print(CommandLine);
+      g_CommandState = 2;
+      RunCommands(CommandLine);
     }
   }
   else {
-    if (cVar1 == 0) {
-      print(DAT_0000c878,DAT_0000c87c);
+    if (CommandState == 0) {
+      Serial.println(">> ");
     }
-    *DroneMode = cVar1 == 0;
+    g_CommandState = CommandState == 0;
   }
+  /*
   *DAT_0000c888 = *VXTChannelNumber;
   FUN_00017c08(auStack_28);
   */
@@ -744,7 +1010,7 @@ void UpdateOSD() {
 
   memset(TextBuffer,0,20);
 
-  if ((((*OSDDebugNumber != 1) && (g_DroneMode != ARMED)) && (g_OSDNeedToDisplayWarnings != 0)) && (g_OSDDiagWarnOveride == 0)) {
+  if ((((OSDDebugNumber != 1) && (g_DroneMode != ARMED)) && (g_OSDNeedToDisplayWarnings != 0)) && (g_OSDDiagWarnOveride == 0)) {
     Serial.println("OSD: Displaying Warnings");
     g_OSDNeedToDisplayWarnings = 0;
     memset(TextBuffer,0,20);
@@ -775,16 +1041,16 @@ void UpdateOSD() {
     *pbVar4 = 0;
     osd.clearScreen();
   }
-  pfVar5 = DAT_0000897c;
-  int OSDVoltage = *DAT_00008978 + g_OSDLiPoOffset;
-  *DAT_0000897c = OSDVoltage;
+  pfVar5 = LiPoVoltWithOffset;
+  fVar12 = *LiPoVolts + *OSDLipoOffset;
+  *LiPoVoltWithOffset = fVar12;
   */
   memset(TextBuffer,0,20);
   if (g_OSDDisplayVolts == 1) {
     snprintf(TextBuffer,20,"%.1f  ", (double)OSDVoltage);
   }
   osd.print(TextBuffer,0,11,0,0);
-  DisplayMode = g_OSDDebugMode;
+  int DisplayMode = g_OSDDebugMode;
   if (DisplayMode != OSD_NONE) {
     
     if (DisplayMode == OSD_RACE) {
@@ -807,8 +1073,7 @@ void UpdateOSD() {
       
       memset(TextBuffer,0,20);
       /*
-      FUN_00018e9c(*pfVar5);
-      snprintf(TextBuffer,20,"%.1f " pfVar5);
+      snprintf(TextBuffer,20,"%.1f ", (double)pfVar5);
       osd.print(TextBuffer,0,11,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%s",DAT_00008c84);
@@ -824,12 +1089,12 @@ void UpdateOSD() {
       osd.print(TextBuffer,0,9,0,0);
       memset(TextBuffer,0,20);
       fVar12 = (float)VectorSignedToFloat((int)*DAT_00008c98,(byte)(in_fpscr >> 0x16) & 3);
-      FUN_00018e9c(fVar12/ 10.0);
+      FloatToDouble(fVar12/ 10.0);
       snprintf(TextBuffer,20,"%.2f    ");
       osd.print(TextBuffer,0,8,0,0);
       memset(TextBuffer,0,20);
       fVar12 = (float)VectorSignedToFloat((int)*DAT_00008ca0,(byte)(in_fpscr >> 0x16) & 3);
-      FUN_00018e9c(fVar12/ 10.0);
+      FloatToDouble(fVar12/ 10.0);
       snprintf(TextBuffer,20,"%.2f    ");
       osd.print(TextBuffer,0,7,0,0);
       memset(TextBuffer,0,20);
@@ -872,24 +1137,28 @@ void UpdateOSD() {
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%d    ",puVar7[7]);
       osd.print(TextBuffer,6,4,0,0);
+      */
       memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",*DAT_00008f24);
+      snprintf(TextBuffer,20,"%d    ", g_DeltaTime);
       osd.print(TextBuffer,6,2,0,0);
+      /*
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%s      ",DAT_00008f2c);
       osd.print(TextBuffer,12,2,0,0);
       */
       memset(TextBuffer,0,20);
-      if (g_DroneMode == DISARMED)
-        strcpy(TextBuffer, "DISARMED");
+      if (g_DroneMode == DISARMED) {
+        strcpy(TextBuffer, "DISARMED    ");
       } else if (g_DroneMode == ARMED) {
-        strcpy(TextBuffer, "ARMED");
+        strcpy(TextBuffer, "ARMED    ");
       } else if (g_DroneMode == KILLED) {
-        strcpy(TextBuffer, "KILLED");
+        strcpy(TextBuffer, "KILLED    ");
       } else if (g_DroneMode == REVIVED) {
-        strcpy(TextBuffer, "REVIVED");
+        strcpy(TextBuffer, "REVIVED    ");
       } else if (g_DroneMode == FAILSAFED) {
-        strcpy(TextBuffer, "FAILSAFED");
+        strcpy(TextBuffer, "FAILSAFED    ");
+      } else {
+        strcpy(TextBuffer, "UNDEFINED    ");
       }
       osd.print(TextBuffer,12,3,0,0);
       /*
@@ -907,9 +1176,11 @@ void UpdateOSD() {
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"RATE: %d      ",*DAT_00008f64 + 1);
       osd.print(TextBuffer,12,7,0,0);
+      */
       memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"BUTTON: %d      ",*DAT_00008f6c);
+      snprintf(TextBuffer,20,"BUTTON: %d      ", g_userButtonDown);
       osd.print(TextBuffer,12,8,0,0);
+      /*
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"FW: %d,%d,%d     ", 21,*DAT_00008f74,*DAT_00008f7c);
       osd.print(TextBuffer,12,9,0,0);
@@ -931,7 +1202,7 @@ void loop()
   UpdateOSD(); //STUB
   IRCUpdate(); //STUB
   //UpdateTelem();
-  //FUN_00004660();
+  //ADCUpdate();
   //FUN_00009cc8();
   DiagnosticsTimoutChecks(); //STUB
   //FUN_00007280();
