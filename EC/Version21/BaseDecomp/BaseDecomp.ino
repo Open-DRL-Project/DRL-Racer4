@@ -1,6 +1,4 @@
 #include <SAMD_SafeFlashStorage.h>
-
-
 #include <SPI.h>
 #include <Arduino.h>
 #include <drl-max7456.h>
@@ -1061,7 +1059,6 @@ void UpdateDroneState() {
   }
   /*
   *DAT_0000c888 = *VXTChannelNumber;
-  FUN_00017c08(auStack_28);
   */
 }
 
@@ -1074,7 +1071,7 @@ void IRCUpdate() {
   int LastTimeCheck = g_LastIRCUpdateTimeCheck;
   g_LastIRCUpdateTimeCheck = CurrentTime;
   if (LastTimeCheck < LastUpdatedTime) {
-    return;  // Something broke
+    return;
   }
   if (g_IRCUpdateRate <= (LastTimeCheck - LastUpdatedTime)) {
     g_LastIRCUpdateTime = CurrentTime;
@@ -1155,12 +1152,10 @@ void UpdateOSD() {
   }
 
   /*
-  pbVar4 = DAT_00008974;
-  piVar3 = DAT_00008970;
   if ((*DAT_00008968 == '\0') && ((uint)*DAT_00008974 <= (g_HeartBeatCount >> 1) - *DAT_00008970)) {
     *DAT_00008968 = '\x01';
-    *piVar3 = 0;
-    *pbVar4 = 0;
+    *DAT_00008970 = 0;
+    *DAT_00008974 = 0;
     osd.clearScreen();
   }
   */
