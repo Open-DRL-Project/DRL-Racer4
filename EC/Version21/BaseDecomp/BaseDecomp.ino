@@ -192,6 +192,7 @@ int g_TelemUpdateRate;
 int g_TelemBlackboxMode;
 int g_TelemWhileDisarmed;
 int g_TelemUseFcValues;
+int g_lastTelemUpdate;
 
 // Diagnostics
 int g_DiagnosticsStartUpTime;
@@ -1330,11 +1331,29 @@ void UpdateOSD() {
 }
 
 //STUB
+void UpdateTelem() {
+  if ((g_TelemDisabled != 0) || (g_TelemBlackboxMode != 0 && (g_DroneMode != ARMED))) {
+    return;
+  }
+  /*
+  if ((59 < (millis() - g_LastCTMTelemUpdateTime)) && (DAT_0000cb24 != 0)) {
+    g_LastCTMTelemUpdateTime = millis();
+    iVar3 = FUN_0000c8f8();
+  }
+  */
+  int CurrentTime = micros();
+  if ((CurrentTime - g_lastTelemUpdate) < g_TelemUpdateRate) {
+    return;
+  }
+  g_lastTelemUpdate = CurrentTime;
+}
+
+//STUB
 void loop() {
   UpdateDroneState();  //STUB
   UpdateOSD();         //STUB
   IRCUpdate();         //STUB
-  //UpdateTelem();
+  UpdateTelem(); //STUB
   //ADCUpdate();
   //FUN_00009cc8();
   DiagnosticsTimoutChecks();  //STUB
