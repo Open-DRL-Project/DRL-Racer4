@@ -2,6 +2,7 @@
 #include <SPI.h>
 #include <Arduino.h>
 #include <drl-max7456.h>
+#include <ArduinoECCX08.h>
 
 #include "wiring_private.h"
 #include "DANMsger.h"
@@ -219,9 +220,28 @@ int g_CurrentMuxSet = -1;
 
 int g_currentLiPoVolts;
 
+int g_RSSI = -127;
+int g_DroneHealth;
+int g_FCRateSetting;
+
+
+int g_flightModeFlags;
+int g_DroneArmed;
+
+int g_HPDriveTime;
+int g_IRCVersion;
+int g_LEDCVersion;
+
 // FC polls
 int g_PollFCARM;
 int g_PollRcForColor;
+
+
+void PrintWithMillisLog(String input) {
+  Serial.print(millis());
+  Serial.print(": ");
+  Serial.println(input);
+}
 
 int SETUART3MUX(int target) {
   if (g_CurrentMuxSet == target) return 0;
@@ -290,42 +310,6 @@ void FUN_00009a38() {
   //FUN_0000995c(DAT_00009b28);
 
   delay(2000);
-
-  char CRCTEST[5]{
-    0x00, 0x00, 0xC6, 0x50, 0x40
-  };
-  Serial.printf("CRC Hex: 0x%04X\n", LEDC.calculateCRC(CRCTEST, 5));
-
-  uint8_t crcInput[] = {
-    0x00, 0x00,  // Payload length
-    0xB5,        // Advance command
-    0x50,        // LEDC channel 0
-    0x40         // EC channel 0
-  };
-
-  uint16_t crc = LEDC.calculateCRC(
-    (char*)crcInput,
-    sizeof(crcInput));
-
-  uint8_t packet[] = {
-    0xBA,
-    0x00, 0x00,
-    0xB5,
-    0x50,
-    0x40,
-    (uint8_t)(crc >> 8),
-    (uint8_t)(crc & 0xFF)
-  };
-
-  Serial.printf("CRC: %04X\n", crc);
-  Serial.print("TX: ");
-
-  for (size_t i = 0; i < sizeof(packet); i++) {
-    Serial.printf("%02X ", packet[i]);
-  }
-  Serial.println();
-
-  SerialCom0.write(packet, sizeof(packet));
 }
 
 //STUB: NEEDS UNKNOW WRITES
@@ -644,19 +628,43 @@ void DiagnosticsInit() {
   Serial.println("Diagnostics: Initialized");
 }
 
+//STUB: NEEDS CONFIG
+void ECCX08Init() {
+  if (!ECCX08.begin()) {
+    Serial.println("The ECC508/ECC608 is not connected");
+    return;
+  }
+  if (!ECCX08.locked()) {
+    /*
+    Serial.println("The ECC508/ECC608 is not locked, locking it now!");
+    if (!ECCX08.writeConfiguration()) {
+      Serial.println("Writing ECCX08 configuration failed!");
+      return;
+    }
+    if (!ECCX08.lock()) {
+      Serial.println("Locking ECCX08 configuration failed!");
+      return;
+    }
+    */
+
+    Serial.println("ECCX08 locked successfully");
+    //FUN_00015cdc(DAT_00009434);
+    //GenerateSelfSignedCert();
+  }
+}
 
 //STUB
 void setup() {
   FUN_00009a38();  //STUB
   Serial.println("<EC STARTUP>");
   SetStorageDefaults();  //STUB
-  FlashInit();           //STUB
+  FlashInit();           //STUB: FAIL/NOT DOING
   //ADCInit();
   GetSerialNumber();  //Done
   OSDInit();          //Done
   TelemetryInit();    //Done
   IRInit();           //Done
-  //ECCX08Init();
+  ECCX08Init();       //STUB
   //FUN_00006d04();
   //CameraInit();
   DiagnosticsInit();  //Done
@@ -774,6 +782,64 @@ void SetDiagWarnOveride(int overide) {
   OSDDiagWarnOveride.write(overide);
 }
 
+void SetDroneMode(int Mode) {
+  if (!(Mode <= 5)) {
+    return;
+  }
+  if (Mode == DISARMED) {
+    if (g_DroneMode != ARMED && g_DroneMode != FAILSAFED) {
+      return;
+    }
+    PrintWithMillisLog("< SYSTEM DISARMED >");
+    //FUN_00006968(1);
+    g_DroneMode = Mode;
+  } else if (Mode == ARMED) {
+    if (g_DroneMode != DISARMED) {
+      return;
+    }
+    PrintWithMillisLog("< SYSTEM ARMED >");
+    //FUN_00006968(0);
+    g_DroneMode = Mode;
+  } else if (Mode == KILLED) {
+    PrintWithMillisLog("< SYSTEM KILLED >");
+    //DAT_0000a8bc = 1;
+    if (g_DroneMode != KILLED) {
+      //FUN_00006968(2);
+    }
+    KillSystem();
+    g_DroneMode = Mode;
+  } else if (Mode == REVIVED) {
+    //if (*DAT_0000a8bc == 0) {
+    //  return 0;
+    //}
+    //DAT_0000a8bc = 0;
+    PrintWithMillisLog("< SYSTEM REVIVED >");
+    ReviveSystem();
+    //FUN_00006968(4);
+    g_DroneMode = Mode;
+  } else if (Mode == FAILSAFED) {
+    if (DISARMED < g_DroneMode - 1) {
+      return;
+    }
+    PrintWithMillisLog("< SYSTEM FAILSAFED >");
+    //FUN_00006968(3);
+    FailsafeDrone();
+    g_DroneMode = Mode;
+  }
+}
+
+void SetHPDriveTime(int time) {
+  if (time == 0) {
+    digitalWrite(18, LOW);
+    g_HPDriveTime = -1;
+  } else {
+    digitalWrite(18, 1);
+    if (time != 255) {
+      g_HPDriveTime = millis() + time;
+    }
+  }
+}
+
 //STUB
 void RunCommands(char* CommandLineIN) {
   char CommandLine[1024];
@@ -858,16 +924,13 @@ void RunCommands(char* CommandLineIN) {
       }
       return;
     }
-    /* ------------------- HP_DRIVE
-    iVar10 = strcmp(CommandLineArg2,DAT_0000b09c);
-    if (iVar10 == 0) {
-      print(DAT_0000b058,DAT_0000b0a0);
-      uVar3 = strtol(auStack_3b0,0,10);
-      FUN_00015dca(DAT_0000b058,uVar3,0x10);
-      FUN_0000aa90(uVar3);
-      return 0;
+
+    if (0 == strcmp(arguments[1], "hp_drive")) {
+      Serial.print("> Set High Power Drive to ");
+        Serial.println(arguments[2]);
+      SetHPDriveTime(strtol(arguments[2], 0, 10));
+      return;
     }
-    */
 
     if (0 == strcmp(arguments[1], "system_channel")) {
       /*
@@ -928,7 +991,7 @@ void RunCommands(char* CommandLineIN) {
 void UpdateDroneState() {
   char CommandLine[1024];
   /*
-  if ((((*DAT_0000c820 != '\0') && (*DAT_0000c824 == '\0')) && (*DAT_0000c828 != '\0')) && (16 < g_HeartBeatCount)) {
+  if ((((*DAT_0000c820 != 0) && (*DAT_0000c824 == 0)) && (*DAT_0000c828 != 0)) && (16 < g_HeartBeatCount)) {
     *DAT_0000c824 = '\x01';
     FUN_00006558();
   }
@@ -956,25 +1019,22 @@ void UpdateDroneState() {
     }
   }
   if (g_PollFCARM != 0) {
-    /*
-    uVar8 = *DAT_0000c84c;
-    if ((uVar8 & 0xfffffbff) == 1) {
-      if (*DAT_0000c850 != '\0') goto LAB_0000c704;
-      *DAT_0000c850 = '\x01';
-      uVar6 = 2;
+    if ((g_flightModeFlags & 0xfffffbff) == 1) {
+      if (g_DroneArmed == 0) {
+        g_DroneArmed = 1;
+        SetDroneMode(ARMED);
+      }
+    } else if (g_flightModeFlags == 0x200) {
+      if (g_DroneArmed != 0) {
+        g_DroneArmed = 0;
+        SetDroneMode(FAILSAFED);
+      }
+    } else {
+      if ((g_flightModeFlags == 0) || (g_DroneArmed != 0)) {
+        g_DroneArmed = 0;
+        SetDroneMode(DISARMED);
+      }
     }
-    else if (uVar8 == 0x200) {
-      if (*DAT_0000c850 == '\0') goto LAB_0000c704;
-      *DAT_0000c850 = '\0';
-      uVar6 = 5;
-    }
-    else {
-      if ((uVar8 != 0) || (*DAT_0000c850 == '\0')) goto LAB_0000c704;
-      *DAT_0000c850 = '\0';
-      uVar6 = 1;
-    }
-    SetDroneMode(uVar6);
-    */
   }
   if (droneMode != ARMED) {
     int CurrentTime = millis();
@@ -983,58 +1043,22 @@ void UpdateDroneState() {
       g_userButtonDownAt = CurrentTime;
     } else if (g_userButtonDown && digitalRead(USER_BUTTON) && 200 < (CurrentTime - g_userButtonDownAt)) {  // The time here needs to be checked, I just guessed.
       g_userButtonDown = false;
-      SETUART3MUX(0);
-      uint8_t crcInput[] = {
-        0x00, 0x00,
-        0xC6,
-        0x50,
-        0x40
-      };
-
-      uint16_t crc = LEDC.calculateCRC(
-        (char*)crcInput,
-        sizeof(crcInput));
-
-      uint8_t packet[] = {
-        0xBA,
-        0x00, 0x00,
-        0xC6,
-        0x50,
-        0x40,
-        (uint8_t)(crc >> 8),
-        (uint8_t)(crc & 0xFF)
-      };
-
-      Serial.printf("CRC: %04X\n", crc);
-      Serial.print("TX: ");
-
-      for (size_t i = 0; i < sizeof(packet); i++) {
-        Serial.printf("%02X ", packet[i]);
-      }
-      Serial.println();
-
-      SerialCom0.write(packet, sizeof(packet));
-      delay(1000);
-      Serial.println(SerialCom0.available());
-      Serial.println(SerialCom0.read());
       //LEDColorAdvance();
     }
   }
-  /*
-  puVar2 = DAT_0000c85c;
-  uVar8 = millis();
-  if (*puVar2 < uVar8) {
-    digitalWrite(18,0);
-    *puVar2 = 0xffffffff;
+
+  if (g_HPDriveTime < millis()) {
+    digitalWrite(18, 0);
+    g_HPDriveTime = 0xffffffff;
   }
-  */
+
   if (g_PollRcForColor != 0 && droneMode == DISARMED) {
     /*
     if (*(ushort *)(DAT_0000c864 + 10) < 1001) {
-      if ((*(ushort *)(DAT_0000c864 + 10) != 1000) && (*DAT_0000c868 != '\0')) {
-        *DAT_0000c868 = '\0';
+      if ((*(ushort *)(DAT_0000c864 + 10) != 1000) && (*DAT_0000c868 != 0)) {
+        *DAT_0000c868 = 0;
       }
-    } else if (*DAT_0000c868 == '\0') {
+    } else if (*DAT_0000c868 == 0) {
       *DAT_0000c868 = '\x01';
       FUN_0000a714(uVar6);
       LEDColorAdvance();
@@ -1042,7 +1066,6 @@ void UpdateDroneState() {
     */
   }
 
-  //FUN_00017c8c(auStack_28,DAT_0000c874);
   int CommandState = g_CommandState;
   if (g_CommandState == 1) {
     if (0 < Serial.available()) {
@@ -1152,7 +1175,7 @@ void UpdateOSD() {
   }
 
   /*
-  if ((*DAT_00008968 == '\0') && ((uint)*DAT_00008974 <= (g_HeartBeatCount >> 1) - *DAT_00008970)) {
+  if ((*DAT_00008968 == 0) && ((uint)*DAT_00008974 <= (g_HeartBeatCount >> 1) - *DAT_00008970)) {
     *DAT_00008968 = '\x01';
     *DAT_00008970 = 0;
     *DAT_00008974 = 0;
@@ -1175,26 +1198,24 @@ void UpdateOSD() {
       snprintf(TextBuffer, 20, "%d ", g_VTXChannelNumber);
       osd.print(TextBuffer, 2, 11, 0, 0);
       memset(TextBuffer, 0, 20);
-      /*
-      snprintf(TextBuffer,20,"%d ",*DAT_0000899c + 1);
-      osd.print(TextBuffer,6,11,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",(int)*DAT_000089a0);
-      osd.print(TextBuffer,15,11,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",*DAT_000089a8);
-      osd.print(TextBuffer,20,11,0,0);
-      */
+      snprintf(TextBuffer, 20, "%d ", g_FCRateSetting + 1);
+      osd.print(TextBuffer, 6, 11, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_RSSI);
+      osd.print(TextBuffer, 15, 11, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_DroneHealth);
+      osd.print(TextBuffer, 20, 11, 0, 0);
     } else {
       if (DisplayMode != OSD_DEBUG) return;
 
       memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%.1f ", (double)g_OSDVoltage);
+      osd.print(TextBuffer, 0, 11, 0, 0);
       /*
-      snprintf(TextBuffer,20,"%.1f ", (double)pfVar5);
-      osd.print(TextBuffer,0,11,0,0);
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%s",DAT_00008c84);
-      osd.print(TextBuffer,0,01,0,0);
+      osd.print(TextBuffer,0,1,0,0);
       puVar6 = DAT_00008c90;
       */
       memset(TextBuffer, 0, 20);
@@ -1260,7 +1281,7 @@ void UpdateOSD() {
       osd.print(TextBuffer, 6, 2, 0, 0);
       /*
       memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%s      ",DAT_00008f2c);
+      snprintf(TextBuffer,20,"%s      ",DebugError);
       osd.print(TextBuffer,12,2,0,0);
       */
       memset(TextBuffer, 0, 20);
@@ -1282,32 +1303,28 @@ void UpdateOSD() {
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"CTRL: %d      ",*DAT_00008f4c);
       osd.print(TextBuffer,12,4,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"FC: %d      ",*DAT_00008f54);
-      osd.print(TextBuffer,12,5,0,0);
       */
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "FC: %d      ", g_flightModeFlags);
+      osd.print(TextBuffer, 12, 5, 0, 0);
       memset(TextBuffer, 0, 20);
       snprintf(TextBuffer, 20, "CHANNEL: %d      ", g_VTXChannelNumber);
       osd.print(TextBuffer, 12, 6, 0, 0);
-      /*
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"RATE: %d      ",*DAT_00008f64 + 1);
-      osd.print(TextBuffer,12,7,0,0);
-      */
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "RATE: %d      ", g_FCRateSetting + 1);
+      osd.print(TextBuffer, 12, 7, 0, 0);
       memset(TextBuffer, 0, 20);
       snprintf(TextBuffer, 20, "BUTTON: %d      ", g_userButtonDown);
       osd.print(TextBuffer, 12, 8, 0, 0);
-      /*
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"FW: %d,%d,%d     ", 21,*DAT_00008f74,*DAT_00008f7c);
-      osd.print(TextBuffer,12,9,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"RSSI: %d      ",(int)*DAT_00008f80);
-      osd.print(TextBuffer,12,10,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"HEALTH: %d      ",*DAT_00008f88);
-      osd.print(TextBuffer,12,11,0,0);
-      */
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "FW: %d,%d,%d     ", 21, g_IRCVersion, g_LEDCVersion);
+      osd.print(TextBuffer, 12, 9, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "RSSI: %d      ", g_RSSI);
+      osd.print(TextBuffer, 12, 10, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "HEALTH: %d      ", g_DroneHealth);
+      osd.print(TextBuffer, 12, 11, 0, 0);
     }
   }
 }
