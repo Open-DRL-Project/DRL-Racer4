@@ -193,6 +193,7 @@ int g_TelemBlackboxMode;
 int g_TelemWhileDisarmed;
 int g_TelemUseFcValues;
 int g_lastTelemUpdate;
+int g_telemCycleIndex;
 
 // Diagnostics
 int g_DiagnosticsStartUpTime;
@@ -1346,6 +1347,40 @@ void UpdateTelem() {
     return;
   }
   g_lastTelemUpdate = CurrentTime;
+
+  int TelemPacketType;
+
+  if (g_telemCycleIndex == 0) {
+    TelemPacketType = 0x96;
+  }
+  else if (g_telemCycleIndex == 1) {
+LAB_0000cae6:
+    if ((g_DroneMode != 2) && (g_TelemWhileDisarmed == 0)) goto LAB_0000cafc;
+    TelemPacketType = 0x68;
+  }
+  else {
+    if (g_telemCycleIndex == 2) {
+      if ((g_DroneMode != 2) && (g_TelemWhileDisarmed == 0)) goto LAB_0000cafc;
+    }
+    else {
+      if (g_telemCycleIndex == 3) {
+        TelemPacketType = 0x69;
+        goto LAB_0000cadc;
+      }
+      if (g_telemCycleIndex == 4) goto LAB_0000cae6;
+      if (g_telemCycleIndex != 5) goto LAB_0000cafc;
+    }
+    TelemPacketType = 0x6c;
+  }
+LAB_0000cadc:
+  //SendTelemPacketByType(TelemPacketType);
+LAB_0000cafc:
+  if (g_telemCycleIndex < 5) {
+    g_telemCycleIndex++;
+  }
+  else {
+    g_telemCycleIndex = 0;
+  }
 }
 
 //STUB
