@@ -1,0 +1,14 @@
+CTL board MK22FN512CAP12, dumped 2026-10-18 20:57:52 via MCU-Link Pro (CMSIS-DAP) SWD, pyOCD 0.45.1 raw DAP, 1 MHz
+Method: AHB-AP reads while running; no reset, no halt, no target writes. Flash read twice, identical.
+DP IDCODE 2BA01477, AP0 IDR 24770011, AP1 (MDM-AP) IDR 001C0000, MDM-AP STATUS 0000003A
+SIM_SDID   22001E9B
+SIM_FCFG1  0B0F0F00
+SIM_FCFG2  20A00000
+SIM_UIDH   0000A191
+SIM_UIDMH  16410005
+SIM_UIDML  0020000A
+SIM_UIDL   42534E45
+FTFA FSTAT/FCNFG/FSEC/FOPT word @40020000 = FFFE0080
+Flash config field 0x400-0x40F: ff ff ff ff ff ff ff ff ff ff ff ff fe ff ff ff
+flash SHA-256 32fe9acf20a281620f3452810b28a100bd105e4d69bfad7d993fe35234fb05e9
+RAM snapshot (live, not reproducible) SHA-256 7e7c24fbc0f70c64d26387cf2f57b0e0c47e3091f1e089bc88b40f2dae48cf9f
