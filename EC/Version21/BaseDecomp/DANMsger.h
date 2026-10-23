@@ -17,13 +17,13 @@ struct DANPacket {
 };
 #pragma pop
 
-class enum DANAddresses {
+enum class DANAddresses {
   LEDC = 0x50,
-  MMC = 0x60
+  MMC = 0x60,
   IRC = 0x70
-}
+};
 
-class enum DANCommandIDs {
+enum class DANCommandIDs {
   ACK_NACK = 1,
   CFG_UPDATE = 0x21,
   KILL = 0xee,
@@ -35,6 +35,7 @@ class enum DANCommandIDs {
   LED_COLOR_ADVANCE = 0xb4,
   SET_LED_RACE_MODE = 0xb5,
   SET_LED_ANIM_PARAMS = 0xb6,
+  SET_LED_ANIMATION_INDEX = 0xb7,
   RESET = 0xc1,
   AMBIGUOUS_ROUTE = 0xc2,
   AMBIGUOUS_ROUTE_RESPONSE = 0xc3,
