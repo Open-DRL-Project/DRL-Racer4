@@ -195,6 +195,8 @@ int g_DroneArmed;
 int g_HPDriveTime;
 int g_IRCVersion;
 int g_LEDCVersion;
+int g_MCCVersion;
+
 
 // FC polls
 int g_PollFCARM;

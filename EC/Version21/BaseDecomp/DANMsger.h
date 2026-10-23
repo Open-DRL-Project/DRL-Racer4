@@ -17,7 +17,14 @@ struct DANPacket {
 };
 #pragma pop
 
-enum DANCommandIDs {
+class enum DANAddresses {
+  LEDC = 0x50,
+  MMC = 0x60
+  IRC = 0x70
+}
+
+class enum DANCommandIDs {
+  ACK_NACK = 1,
   CFG_UPDATE = 0x21,
   KILL = 0xee,
   REVIVE = 0xef,

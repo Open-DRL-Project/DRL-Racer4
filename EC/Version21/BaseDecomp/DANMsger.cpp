@@ -6,14 +6,17 @@
 
 #define CONCAT16(high, low) (((high) << 8) | (low))
 
+
 extern int g_RSSI;
 extern int g_DroneHealth;
+extern int g_MCCVersion;
 extern uint16_t g_CurrentControlState;
 extern String g_RaceStatus;
 
 extern int g_IRCVersion;
 extern int g_LEDCVersion;
 
+extern void PrintWithMillisLog(String input);
 extern void KillSystem();
 extern void SetOSDDebugMode(int mode);
 extern void SetHPDriveTime(int time);
@@ -41,28 +44,25 @@ uint16_t DANMsger::calculateCRC(const char *data, size_t length) {
 }
 
 void DANMsger::GetAndProccessDanMsgRX(uint8_t CurrentChar) {
-  uint32_t uVar5;
-  uint16_t bVar6;
-  uint32_t uVar7;
+  uint32_t CalcedCRC;
+  uint16_t NextDanMsgState;
   DANPacket *MSG;
 
   if ((RXConfig << 0x1f) < 0) {
-    bVar6 = CurrentRXMsgState;
-    if ((bVar6 << 0x18) < 0) {
+    NextDanMsgState = CurrentRXMsgState;
+    if ((NextDanMsgState << 0x18) < 0) {
       if ((CurrentChar == 0xba) || (CurrentChar == 0xda)) {
-        bVar6 = bVar6 & 0x7f;
+        NextDanMsgState = NextDanMsgState & 0x7f;
       } else {
-      LAB_00006464:
-        bVar6 = 0;
+        NextDanMsgState = 0;
       }
-    LAB_00006470:
-      CurrentRXMsgState = bVar6;
+      CurrentRXMsgState = NextDanMsgState;
     } else {
       if (CurrentChar == 0xba)
-        goto LAB_00006464;
+        NextDanMsgState = 0;
       if (CurrentChar == 0xda) {
-        bVar6 = bVar6 | 0x80;
-        goto LAB_00006470;
+        NextDanMsgState = NextDanMsgState | 0x80;
+        CurrentRXMsgState = NextDanMsgState;
       }
     }
   }
@@ -70,39 +70,39 @@ void DANMsger::GetAndProccessDanMsgRX(uint8_t CurrentChar) {
   case 0:
     ExpectedLength = 0;
     if (-1 < (RXConfig << 0x1f))
-      goto LAB_000064ac;
+      goto CASE2;
     if (CurrentChar != 0xba) {
       return;
     }
-    bVar6 = 2;
+    NextDanMsgState = 2;
     break;
   default:
     return;
   case 2:
-  LAB_000064ac:
+  CASE2:
     RXBuffer.LEN_H = CurrentChar;
-    bVar6 = 3;
+    NextDanMsgState = 3;
     break;
   case 3:
     RXBuffer.LEN_L = CurrentChar;
     ExpectedLength = CONCAT16(RXBuffer.LEN_H, RXBuffer.LEN_L);
-    bVar6 = 4;
+    NextDanMsgState = 4;
     break;
   case 4:
     RXBuffer.CmdID = CurrentChar;
-    bVar6 = 5;
+    NextDanMsgState = 5;
     break;
   case 5:
     RXBuffer.MsgDest = CurrentChar;
-    bVar6 = 6;
+    NextDanMsgState = 6;
     break;
   case 6:
     RXBuffer.MsgDest = CurrentChar;
     CurrentRXPayloadIDX = 0;
     if (ExpectedLength == 0) {
-      bVar6 = 9;
+      NextDanMsgState = 9;
     } else {
-      bVar6 = 7;
+      NextDanMsgState = 7;
     }
     break;
   case 7:
@@ -112,25 +112,25 @@ void DANMsger::GetAndProccessDanMsgRX(uint8_t CurrentChar) {
     if (CurrentRXPayloadIDX != ExpectedLength) {
       return;
     }
-    bVar6 = 9;
+    NextDanMsgState = 9;
     break;
   case 9:
     RXBuffer.CRC_H = CurrentChar;
-    bVar6 = 10;
+    NextDanMsgState = 10;
     break;
   case 10:
     RXBuffer.CRC_L = CurrentChar;
     RXCRC = CurrentChar | RXBuffer.CRC_H << 8;
-    uVar5 = calculateCRC((char *)&RXBuffer, ExpectedLength + 5);
-    if ((RXCRC & 0xffff) == uVar5) {
+    CalcedCRC = calculateCRC((char *)&RXBuffer, ExpectedLength + 5);
+    if ((RXCRC & 0xffff) == CalcedCRC) {
       // Print(PTR_s_>>_DAN_PACKET_GOOD_-_length:_%d_00006550,ExpectedLength);
       ProcessDanMsg();
     } else {
-      // Print(PTR_s_ERROR:_DAN_PACKET_BAD_00006554);
+      Serial.println("ERROR: DAN PACKET BAD");
     }
-    bVar6 = 0;
+    NextDanMsgState = 0;
   }
-  CurrentRXMsgState = bVar6;
+  CurrentRXMsgState = NextDanMsgState;
   return;
 }
 
@@ -156,45 +156,45 @@ void DANMsger::ProcessDanMsg() {
   // Print(Thumb)(PTR_s_Received_a_DAN_Message_from:_%02_00005e5c,DanObject.WriteFunction[4],DanObject.WriteFunction[3]);
   // Print(Thumb)(PTR_s_System_current_DAN_address_is:_%_00005e60,g_currentDANAddress);
   // Print(Thumb)(PTR_s_Message_payload_length_is:_%d_00005e64,ExpectedLength);
-  if (RXBuffer.CmdID != CFG_UPDATE) {
+  if (RXBuffer.CmdID == DANCommandIDs::CFG_UPDATE) {
     iVar5 = IsMsgForDevice(RXBuffer.MsgDest);
-    if (iVar5 != 0)
-      goto LAB_processCMD_ID;
+    if (iVar5 != 0) goto LAB_processCMD_ID;
     // PrintWIthMillisLog(PTR_s_>_Message_Not_Intended_For_EC_De_00005eb4,RXBuffer.MsgDest);
-    bVar10 = RXBuffer.MsgDest & 0xf0;
-    if (bVar10 != 0x50) {
-      if (bVar10 == 0x70) {
-        // TODO: HOW?
-        // PrintWIthMillisLog(PTR_s_._Forwarding_message_to_IRC_00005ebc);
+
+    int Dest = RXBuffer.MsgDest & 0xf0;
+
+    if (Dest != DANAddresses::LEDC) {
+      if (Dest == DANAddresses::IRC) {
+        PrintWIthMillisLog("Forwarding message to IRC");
         // SendDANmsgToIRC(RXBuffer,ExpectedLength);
-      } else if (bVar10 == 0x60) {
-        // PrintWIthMillisLog(PTR_s_._Forwarding_message_to_MMC_00005ec0);
+      } else if (Dest == DANAddresses::MMC) {
+        PrintWIthMillisLog("Forwarding message to MMC");
         // SendDANmsgToMMC(RXBuffer,ExpectedLength);
       } else {
-        // PrintWIthMillisLog(PTR_s_._Forwarding_message_to_CTM-D_00005ec4);
+        PrintWIthMillisLog("Forwarding message to CTM");
         // SendDANmsgToCTM(RXBuffer,ExpectedLength);
       }
       return;
     }
-    // PrintWIthMillisLog(PTR_s_._Forwarding_message_to_LEDC_00005eb8);
+    PrintWIthMillisLog("Forwarding message to LEDC");
     // sendDANmsgToLEDC(RXBuffer,ExpectedLength);
     return;
   }
   if ((0x3e < RXBuffer.MsgDest - 1) && (RXBuffer.MsgDest < 0x49)) {
     if (ExpectedLength == 5) {
       bVar10 = RXBuffer.Payload[2];
-      uVar11 = CONCAT16(RXBuffer.Payload[0], RXBuffer.Payload[1]);
+      uint16_t uVar11 = CONCAT16(RXBuffer.Payload[0], RXBuffer.Payload[1]);
       g_RSSI = RXBuffer.Payload[4];
       g_DroneHealth = RXBuffer.Payload[3];
     BackToSetChannel:
       // Print(Thumb)(PTR_s_Channel_Id:_%d_00005e80,bVar10 + 1);
       // SetChannels((uint)bVar10);
-      if ((int)(uVar11 << 0x1e) < 0) {
+      if ((uVar11 << 0x1e) < 0) {
         uVar4 = 2;
       } else {
         uVar4 = 1;
       }
-      g_CurrentControlState = (short)uVar11;
+      g_CurrentControlState = uVar11;
       SetDroneMode(uVar4);
       /*
       pcVar7 = g_RaceStatus;
@@ -216,10 +216,10 @@ void DANMsger::ProcessDanMsg() {
         }
         strcpy(g_RaceStatus,pcVar7);
       }*/
-      if ((int)(uVar11 << 0x1c) < 0) {
+      if ((uVar11 << 0x1c) < 0) {
         SetDroneMode(5);
       }
-      if (((int)(uVar11 << 0x1b) < 0) || ((int)(uVar11 << 0x1a) < 0)) {
+      if (((uVar11 << 0x1b) < 0) || ((uVar11 << 0x1a) < 0)) {
         uVar4 = 3;
       } else {
         uVar4 = 4;
@@ -237,11 +237,10 @@ void DANMsger::ProcessDanMsg() {
   }
   // PrintWithMillis(PTR_s_ERROR:_Incorrect_Address_Range_R_00005e70);
 LAB_processCMD_ID:
-  bVar10 = RXBuffer.CmdID;
-  if (bVar10 == 1) {
+  if (RXBuffer.CmdID == DANCommandIDs::ACK_NACK) {
     if (RXBuffer.Payload[2] == 0x22)
       return;
-    // PrintWIthMillisLog(PTR_s_>_ACK/NACK_00005ec8);
+    PrintWIthMillisLog("> ACK/NACK");
     bVar10 = RXBuffer.Payload[2];
     bVar2 = RXBuffer.Payload[0];
     // PrintWIthMillisLog(PTR_s_Code:_%02X_Origin_Address:_%02X_T_00005ecc,bVar2,RXBuffer.Payload[1],bVar10);
@@ -252,36 +251,36 @@ LAB_processCMD_ID:
       return;
     return;
   }
-  if (RXBuffer.CmdID == KILL) {
-    // PrintWIthMillisLog(PTR_s_>_KILL_00005ed8);
+  if (RXBuffer.CmdID == DANCommandIDs::KILL) {
+    PrintWIthMillisLog("> KILL");
     // FUN_00005b74(RXBuffer.MsgSrc,0,RXBuffer.MsgSrc,0xee);
     KillSystem();
     return;
   }
-  if (RXBuffer.CmdID == REVIVE) {
-    // PrintWIthMillisLog(PTR_s_>_REVIVE_00005edc);
+  if (RXBuffer.CmdID == DANCommandIDs::REVIVE) {
+    PrintWIthMillisLog("> REVIVE");
     // FUN_00005b74(RXBuffer.MsgSrc,0,RXBuffer.MsgSrc,0xef);
     SetDroneMode(4);
     return;
   }
-  if (RXBuffer.CmdID == AMBIGUOUS_ROUTE) {
-    // PrintWIthMillisLog(PTR_s_>_AMBIGUOUS_ROUTE_00005ee0);
+  if (RXBuffer.CmdID == DANCommandIDs::AMBIGUOUS_ROUTE) {
+    PrintWIthMillisLog("> AMBIGUOUS ROUTE");
     return;
   }
-  if (RXBuffer.CmdID == AMBIGUOUS_ROUTE_RESPONSE) {
-    // PrintWIthMillisLog(PTR_s_>_AMBIGUOUS_ROUTE_(RESPONSE)_%02_00005ee4);
+  if (RXBuffer.CmdID == DANCommandIDs::AMBIGUOUS_ROUTE_RESPONSE) {
+    PrintWIthMillisLog("> AMBIGUOUS ROUTE (RESPONSE)");
     memset(acStack_118, 0, 0x40);
     // snprintf(acStack_118,0x40,PTR_s_%.*s_00005ee8,ExpectedLength,RXBuffer.Payload);
     // PrintWIthMillisLog(PTR_s_>_Message_from_%02X_-_%s_00005eec,RXBuffer.MsgSrc,acStack_118);
     return;
   }
-  if (RXBuffer.CmdID == PING) {
-    // PrintWIthMillisLog(PTR_s_>_PING_00005ef0);
+  if (RXBuffer.CmdID == DANCommandIDs::PING) {
+    PrintWIthMillisLog("> PING");
     // SendPing(RXBuffer);
     return;
   }
-  if (RXBuffer.CmdID == PING_RESPONSE) {
-    // PrintWIthMillisLog(PTR_s_>_PING_RESPONSE:_00005ef4);
+  if (RXBuffer.CmdID == DANCommandIDs::PING_RESPONSE) {
+    PrintWIthMillisLog("> PING RESPONSE:");
     uVar11 = ExpectedLength;
     // PrintWIthMillisLog(PTR_s_LENGTH:_%d_00005ef8,uVar11);
     for (ExpectedLength = 0; (ExpectedLength & 0xffff) < uVar11;
@@ -290,24 +289,24 @@ LAB_processCMD_ID:
     }
     return;
   }
-  if (RXBuffer.CmdID == STATUS_REQUEST) {
-    // PrintWIthMillisLog(PTR_s_>_STATUS_REQUEST_00005f00);
+  if (RXBuffer.CmdID == DANCommandIDs::STATUS_REQUEST) {
+    PrintWIthMillisLog("> STATUS REQUEST");
     // SendStatuseResponse(RXBuffer);
     return;
   }
-  if (RXBuffer.CmdID == STATUS_RESPONSE) {
-    // PrintWIthMillisLog(PTR_s_>_STATUS_RESPONSE_00006194);
+  if (RXBuffer.CmdID == DANCommandIDs::STATUS_RESPONSE) {
+    PrintWIthMillisLog("> STATUS RESPONSE");
     bVar10 = RXBuffer.MsgSrc & 0xf0;
-    if (bVar10 == 0x60) {
+    if (bVar10 == DANAddresses::MMC) {
       // PrintWIthMillisLog(PTR_s_MMC_STATUS:_FW:_%d_Operating_Sta_00006198,RXBuffer.Payload[0],RXBuffer.Payload[1]);
       // PrintWIthMillisLog(PTR_s_Address:_%02X_Diagnostics_Code:_%_0000619c,RXBuffer.Payload[2],RXBuffer.Payload[3]);
       bVar10 = RXBuffer.Payload[0];
-      // MCCVersion = bVar10;
+      g_MCCVersion = bVar10;
       // iVar5 = DAT_000061a4;
       if (9 < bVar10)
         return;
     } else {
-      if (bVar10 == 0x50) {
+      if (bVar10 == DANAddresses::LEDC) {
         // PrintWIthMillisLog(PTR_s_LEDC_STATUS:_FW:_%d_Operating_St_000061a8,RXBuffer.Payload[0],RXBuffer.Payload[1]);
         // PrintWIthMillisLog(PTR_s_Address:_%02X_Diagnostics_Code:_%_0000619c,RXBuffer.Payload[2],RXBuffer.Payload[3]);
         bVar10 = RXBuffer.Payload[0];
@@ -315,7 +314,7 @@ LAB_processCMD_ID:
         // iVar5 = DAT_000061b0;
       } else {
         // puVar6 = PTR_s_ERROR:_Unknown_Device_Sent_STATU_000061c0;
-        // if (bVar2 != 0x70) goto switchD_0000622e_default;
+        // if (bVar2 != DANAddresses::IRC) goto switchD_0000622e_default;
         // PrintWIthMillisLog(PTR_s_IRC_STATUS:_FW:_%d_Operating_Sta_000061b4,RXBuffer.Payload[0],RXBuffer.Payload[1]);
         // PrintWIthMillisLog(PTR_s_Address:_%02X_Diagnostics_Code:_%_0000619c,RXBuffer.Payload[2],RXBuffer.Payload[3]);
         bVar10 = RXBuffer.Payload[0];
@@ -328,8 +327,8 @@ LAB_processCMD_ID:
     //(iVar5 + 0x82) = 1;
     return;
   }
-  if (RXBuffer.CmdID == RECEIVE_FILE) {
-    // PrintWIthMillisLog(PTR_s_>_RECEIVE_FILE_000061c4);
+  if (RXBuffer.CmdID == DANCommandIDs::RECEIVE_FILE) {
+    PrintWIthMillisLog("> RECEIVE FILE");
     ExpectedLength = RXBuffer.Payload[0];
     bVar10 = RXBuffer.LEN_H;
     bVar2 = RXBuffer.LEN_L;
@@ -340,8 +339,8 @@ LAB_processCMD_ID:
     // FUN_00008194(acStack_118,uVar11,RXBuffer.Payload + ExpectedLength + 1);
     return;
   }
-  if (RXBuffer.CmdID == SEND_FILE_REQUEST) {
-    // PrintWIthMillisLog(PTR_s_>_SEND_FILE_REQUEST_000061cc);
+  if (RXBuffer.CmdID == DANCommandIDs::SEND_FILE_REQUEST) {
+    PrintWIthMillisLog("> SEND FILE REQUEST");
     bVar10 = RXBuffer.MsgSrc;
     if (1 < ExpectedLength) {
       // FUN_00005b74(bVar10,0,bVar10,0xcb);
@@ -352,8 +351,8 @@ LAB_processCMD_ID:
     // puVar6 = PTR_s_ERROR:_Incorrect_payload_length_f_000061d0;
     goto LAB_00006034;
   }
-  if (RXBuffer.CmdID == LIST_FILES_REQUEST) {
-    // PrintWIthMillisLog(PTR_s_>_LIST_FILES_REQUEST_000061d4);
+  if (RXBuffer.CmdID == DANCommandIDs::LIST_FILES_REQUEST) {
+    PrintWIthMillisLog("> LIST FILES REQUEST");
     bVar2 = RXBuffer.MsgSrc;
     if (ExpectedLength == 1) {
       // FUN_00005b74(bVar2,0,bVar2,0xcb);
@@ -367,8 +366,8 @@ LAB_processCMD_ID:
     // Print(Thumb)(puVar6);
     return;
   }
-  if (RXBuffer.CmdID == FORMAT_FILESYSTEM) {
-    // PrintWIthMillisLog(PTR_s_>_FORMAT_FILESYSTEM_000061dc);
+  if (RXBuffer.CmdID == DANCommandIDs::FORMAT_FILESYSTEM) {
+    PrintWIthMillisLog("> FORMAT FILESYSTEM");
     if (ExpectedLength == 1) {
       // FUN_00008240();
       // FUN_00005b74(RXBuffer.MsgSrc,0,RXBuffer.MsgSrc,0xcd);
@@ -392,14 +391,14 @@ LAB_processCMD_ID:
     //sendDANmsgToLEDC(RXBuffer,ExpectedLength);
     return;
   }*/
-  if (RXBuffer.CmdID == RESET) {
+  if (RXBuffer.CmdID == DANCommandIDs::RESET) {
     // PrintWIthMillisLog(PTR_s_>_RESET_00006200);
     // FUN_00005b74(RXBuffer.MsgSrc,0,RXBuffer.MsgSrc,0xc1);
     delay(0xfa);
     // FUN_0000a8c8();
     return;
   }
-  if (RXBuffer.CmdID == OSD_DISPLAY_REQUEST) {
+  if (RXBuffer.CmdID == DANCommandIDs::OSD_DISPLAY_REQUEST) {
     // PrintWIthMillisLog(PTR_s_>_OSD_DISPLAY_REQUEST_00006204);
     bVar10 = RXBuffer.MsgSrc;
     if (RXBuffer.Payload[0] < 0x14) {
@@ -413,7 +412,7 @@ LAB_processCMD_ID:
     // puVar6 = PTR_s_ERROR:_Incorrect_payload_length_f_00006208;
     goto LAB_00006034;
   }
-  if (RXBuffer.CmdID == OSD_CONTROL) {
+  if (RXBuffer.CmdID == DANCommandIDs::OSD_CONTROL) {
     // PrintWIthMillisLog(PTR_s_>_OSD_CONTROL_0000620c);
     bVar10 = RXBuffer.MsgSrc;
     if (ExpectedLength == 1) {
@@ -425,8 +424,8 @@ LAB_processCMD_ID:
     // puVar6 = PTR_s_ERROR:_Incorrect_payload_length_f_00006210;
     return;
   }
-  if (RXBuffer.CmdID != CAM_CONTROL) {
-    if (RXBuffer.CmdID == FC_CONTROL) {
+  if (RXBuffer.CmdID == DANCommandIDs::CAM_CONTROL) {
+    if (RXBuffer.CmdID == DANCommandIDs::FC_CONTROL) {
       // PrintWIthMillisLog(PTR_s_>_FC_CONTROL_00006428);
       bVar10 = RXBuffer.LEN_H;
       bVar2 = RXBuffer.LEN_L;
@@ -435,14 +434,14 @@ LAB_processCMD_ID:
       // FUN_00006cac();
       return;
     }
-    if (RXBuffer.CmdID == SET_HIGH_POWER_DRIVE) {
+    if (RXBuffer.CmdID == DANCommandIDs::SET_HIGH_POWER_DRIVE) {
       // PrintWIthMillisLog(PTR_s_>_SETTING_HIGH_POWER_DRIVE_0000642c);
       SetHPDriveTime(RXBuffer.Payload[0]);
       return;
     }
-    if (RXBuffer.CmdID != SET_IR_MODE) {
+    if (RXBuffer.CmdID == DANCommandIDs::SET_IR_MODE) {
       // puVar6 = PTR_s_ERROR:_NO_PACKET_HANDLER_DEFINED_0000643c;
-      if (RXBuffer.CmdID == CFG_UPDATE)
+      if (RXBuffer.CmdID == DANCommandIDs::CFG_UPDATE)
         return;
       // goto switchD_0000622e_default;
     }
