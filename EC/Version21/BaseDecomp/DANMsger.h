@@ -2,8 +2,6 @@
 #include <Arduino.h>
 #include <cstdint>
 
-extern uint8_t g_currentDANAddress;
-
 #pragma pack(1)
 struct DANPacket {
   uint8_t LEN_H;
@@ -63,7 +61,13 @@ private:
   uint16_t CurrentRXPayloadIDX;
   uint16_t RXCRC;
   uint8_t CurrentRXMsgState;
-  uint8_t RXConfig;
+  uint8_t RXConfig = 0;
+
+  DANPacket* TXBuffer;
+  uint16_t MsgPayloadLength;
+  uint8_t CurrentTXMsgState;
+  uint16_t CurrentPayloadMsgIDX;
+  uint8_t config;
 
   uint16_t CalcCRCUpdate(char Currentbyte, uint16_t CRC);
 
@@ -73,6 +77,12 @@ public:
   void ProcessDanMsg();
   void GetAndProccessDanMsgRX(uint8_t CurrentChar);
   bool IsMsgForDevice(uint8_t MsgDest);
+
+  bool PrepDanMsgForSending(size_t msgLength, uint8_t src, uint8_t dest, uint8_t CmdID, byte* payload); 
+
+  void SetCRCAndLen(int MsgLength);
+
+  void SendPendingDanMsgs();
 
   DANMsger(Uart &serialPort);
 };

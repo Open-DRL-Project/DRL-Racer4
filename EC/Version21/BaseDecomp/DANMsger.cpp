@@ -6,7 +6,6 @@
 
 #define CONCAT16(high, low) (((high) << 8) | (low))
 
-
 extern int g_RSSI;
 extern int g_DroneHealth;
 extern int g_MCCVersion;
@@ -21,7 +20,8 @@ extern void KillSystem();
 extern void SetOSDDebugMode(int mode);
 extern void SetHPDriveTime(int time);
 extern void SetDroneMode(int Mode);
-uint8_t g_currentDANAddress;
+extern int SetChannels(uint Channel);
+extern uint8_t g_currentDANAddress;
 
 DANMsger::DANMsger(Uart &serialPort) : _serial(serialPort) {}
 
@@ -48,32 +48,32 @@ void DANMsger::GetAndProccessDanMsgRX(uint8_t CurrentChar) {
   uint16_t NextDanMsgState;
   DANPacket *MSG;
 
-  if ((RXConfig << 0x1f) < 0) {
-    NextDanMsgState = CurrentRXMsgState;
-    if ((NextDanMsgState << 0x18) < 0) {
-      if ((CurrentChar == 0xba) || (CurrentChar == 0xda)) {
-        NextDanMsgState = NextDanMsgState & 0x7f;
+  if ((int32_t)((uint32_t)RXConfig << 31) < 0) {
+    if ((int32_t)((uint32_t)CurrentRXMsgState << 24) < 0) {
+      if (CurrentChar == 0xBA || CurrentChar == 0xDA) {
+        CurrentRXMsgState &= 0x7F;
       } else {
-        NextDanMsgState = 0;
+        CurrentRXMsgState = 0;
       }
-      CurrentRXMsgState = NextDanMsgState;
     } else {
-      if (CurrentChar == 0xba)
-        NextDanMsgState = 0;
-      if (CurrentChar == 0xda) {
-        NextDanMsgState = NextDanMsgState | 0x80;
-        CurrentRXMsgState = NextDanMsgState;
+      if (CurrentChar == 0xBA) {
+        CurrentRXMsgState = 0;
+      }
+      if (CurrentChar == 0xDA) {
+        CurrentRXMsgState |= 0x80;
+        return;
       }
     }
   }
+
   switch (CurrentRXMsgState) {
   case 0:
     ExpectedLength = 0;
-    if (-1 < (RXConfig << 0x1f))
-      goto CASE2;
-    if (CurrentChar != 0xba) {
-      return;
-    }
+    if (-1 < (int32_t)((uint32_t)RXConfig << 0x1f))
+      // goto CASE2;
+      if (CurrentChar != 0xba) {
+        return;
+      }
     NextDanMsgState = 2;
     break;
   default:
@@ -97,7 +97,7 @@ void DANMsger::GetAndProccessDanMsgRX(uint8_t CurrentChar) {
     NextDanMsgState = 6;
     break;
   case 6:
-    RXBuffer.MsgDest = CurrentChar;
+    RXBuffer.MsgSrc = CurrentChar;
     CurrentRXPayloadIDX = 0;
     if (ExpectedLength == 0) {
       NextDanMsgState = 9;
@@ -126,7 +126,7 @@ void DANMsger::GetAndProccessDanMsgRX(uint8_t CurrentChar) {
       // Print(PTR_s_>>_DAN_PACKET_GOOD_-_length:_%d_00006550,ExpectedLength);
       ProcessDanMsg();
     } else {
-      Serial.println("ERROR: DAN PACKET BAD");
+      // Serial.println("ERROR: DAN PACKET BAD");
     }
     NextDanMsgState = 0;
   }
@@ -146,7 +146,7 @@ void DANMsger::ProcessDanMsg() {
   short sVar3;
   uint32_t uVar4;
   int iVar5;
-  uint8_t *puVar6;
+  String puVar6;
   uint8_t *pcVar7;
   uint8_t cVar9;
   uint8_t bVar10;
@@ -156,18 +156,20 @@ void DANMsger::ProcessDanMsg() {
   // Print(Thumb)(PTR_s_Received_a_DAN_Message_from:_%02_00005e5c,DanObject.WriteFunction[4],DanObject.WriteFunction[3]);
   // Print(Thumb)(PTR_s_System_current_DAN_address_is:_%_00005e60,g_currentDANAddress);
   // Print(Thumb)(PTR_s_Message_payload_length_is:_%d_00005e64,ExpectedLength);
-  if (RXBuffer.CmdID == DANCommandIDs::CFG_UPDATE) {
+  if (RXBuffer.CmdID != (uint8_t)DANCommandIDs::CFG_UPDATE) {
+    PrintWithMillisLog((String)RXBuffer.CmdID);
     iVar5 = IsMsgForDevice(RXBuffer.MsgDest);
-    if (iVar5 != 0) goto LAB_processCMD_ID;
+    if (iVar5 != 0)
+      goto LAB_processCMD_ID;
     // PrintWithMillisLog(PTR_s_>_Message_Not_Intended_For_EC_De_00005eb4,RXBuffer.MsgDest);
 
     int Dest = RXBuffer.MsgDest & 0xf0;
 
-    if (Dest != DANAddresses::LEDC) {
-      if (Dest == DANAddresses::IRC) {
+    if (Dest != (int)DANAddresses::LEDC) {
+      if (Dest == (int)DANAddresses::IRC) {
         PrintWithMillisLog("Forwarding message to IRC");
         // SendDANmsgToIRC(RXBuffer,ExpectedLength);
-      } else if (Dest == DANAddresses::MMC) {
+      } else if (Dest == (int)DANAddresses::MMC) {
         PrintWithMillisLog("Forwarding message to MMC");
         // SendDANmsgToMMC(RXBuffer,ExpectedLength);
       } else {
@@ -180,22 +182,23 @@ void DANMsger::ProcessDanMsg() {
     // sendDANmsgToLEDC(RXBuffer,ExpectedLength);
     return;
   }
+  PrintWithMillisLog("\t> CTM STATE");
   if ((0x3e < RXBuffer.MsgDest - 1) && (RXBuffer.MsgDest < 0x49)) {
     if (ExpectedLength == 5) {
       bVar10 = RXBuffer.Payload[2];
-      uint16_t uVar11 = CONCAT16(RXBuffer.Payload[0], RXBuffer.Payload[1]);
+      uVar11 = CONCAT16(RXBuffer.Payload[0], RXBuffer.Payload[1]);
       g_RSSI = RXBuffer.Payload[4];
       g_DroneHealth = RXBuffer.Payload[3];
     BackToSetChannel:
       // Print(Thumb)(PTR_s_Channel_Id:_%d_00005e80,bVar10 + 1);
-      // SetChannels((uint)bVar10);
+      SetChannels(bVar10);
       if ((uVar11 << 0x1e) < 0) {
         uVar4 = 2;
       } else {
         uVar4 = 1;
       }
       g_CurrentControlState = uVar11;
-      SetDroneMode(uVar4);
+      // SetDroneMode(uVar4);
       /*
       pcVar7 = g_RaceStatus;
       *DAT_00005e8c = (byte)((uVar11 << 0x15) >> 0x1f);
@@ -216,16 +219,16 @@ void DANMsger::ProcessDanMsg() {
         }
         strcpy(g_RaceStatus,pcVar7);
       }*/
-      if ((uVar11 << 0x1c) < 0) {
-        SetDroneMode(5);
+      if ((int)(uVar11 << 0x1c) < 0) {
+        // SetDroneMode(5);
       }
       if (((uVar11 << 0x1b) < 0) || ((uVar11 << 0x1a) < 0)) {
         uVar4 = 3;
       } else {
         uVar4 = 4;
       }
-      SetDroneMode(uVar4);
-      goto LAB_processCMD_ID;
+      // SetDroneMode(uVar4);
+      return;
     }
     // puVar6 = PTR_s_ERROR:_Incorrect_payload_length_f_00005e7c;
     if (ExpectedLength == 2) {
@@ -237,7 +240,7 @@ void DANMsger::ProcessDanMsg() {
   }
   // PrintWithMillis(PTR_s_ERROR:_Incorrect_Address_Range_R_00005e70);
 LAB_processCMD_ID:
-  if (RXBuffer.CmdID == DANCommandIDs::ACK_NACK) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::ACK_NACK) {
     if (RXBuffer.Payload[2] == 0x22)
       return;
     PrintWithMillisLog("> ACK/NACK");
@@ -251,35 +254,35 @@ LAB_processCMD_ID:
       return;
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::KILL) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::KILL) {
     PrintWithMillisLog("> KILL");
     // FUN_00005b74(RXBuffer.MsgSrc,0,RXBuffer.MsgSrc,0xee);
     KillSystem();
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::REVIVE) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::REVIVE) {
     PrintWithMillisLog("> REVIVE");
     // FUN_00005b74(RXBuffer.MsgSrc,0,RXBuffer.MsgSrc,0xef);
     SetDroneMode(4);
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::AMBIGUOUS_ROUTE) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::AMBIGUOUS_ROUTE) {
     PrintWithMillisLog("> AMBIGUOUS ROUTE");
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::AMBIGUOUS_ROUTE_RESPONSE) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::AMBIGUOUS_ROUTE_RESPONSE) {
     PrintWithMillisLog("> AMBIGUOUS ROUTE (RESPONSE)");
     memset(acStack_118, 0, 0x40);
     // snprintf(acStack_118,0x40,PTR_s_%.*s_00005ee8,ExpectedLength,RXBuffer.Payload);
     // PrintWithMillisLog(PTR_s_>_Message_from_%02X_-_%s_00005eec,RXBuffer.MsgSrc,acStack_118);
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::PING) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::PING) {
     PrintWithMillisLog("> PING");
     // SendPing(RXBuffer);
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::PING_RESPONSE) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::PING_RESPONSE) {
     PrintWithMillisLog("> PING RESPONSE:");
     uVar11 = ExpectedLength;
     // PrintWithMillisLog(PTR_s_LENGTH:_%d_00005ef8,uVar11);
@@ -289,15 +292,15 @@ LAB_processCMD_ID:
     }
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::STATUS_REQUEST) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::STATUS_REQUEST) {
     PrintWithMillisLog("> STATUS REQUEST");
     // SendStatuseResponse(RXBuffer);
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::STATUS_RESPONSE) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::STATUS_RESPONSE) {
     PrintWithMillisLog("> STATUS RESPONSE");
     bVar10 = RXBuffer.MsgSrc & 0xf0;
-    if (bVar10 == DANAddresses::MMC) {
+    if (bVar10 == (int)DANAddresses::MMC) {
       // PrintWithMillisLog(PTR_s_MMC_STATUS:_FW:_%d_Operating_Sta_00006198,RXBuffer.Payload[0],RXBuffer.Payload[1]);
       // PrintWithMillisLog(PTR_s_Address:_%02X_Diagnostics_Code:_%_0000619c,RXBuffer.Payload[2],RXBuffer.Payload[3]);
       bVar10 = RXBuffer.Payload[0];
@@ -306,7 +309,7 @@ LAB_processCMD_ID:
       if (9 < bVar10)
         return;
     } else {
-      if (bVar10 == DANAddresses::LEDC) {
+      if (bVar10 == (int)DANAddresses::LEDC) {
         // PrintWithMillisLog(PTR_s_LEDC_STATUS:_FW:_%d_Operating_St_000061a8,RXBuffer.Payload[0],RXBuffer.Payload[1]);
         // PrintWithMillisLog(PTR_s_Address:_%02X_Diagnostics_Code:_%_0000619c,RXBuffer.Payload[2],RXBuffer.Payload[3]);
         bVar10 = RXBuffer.Payload[0];
@@ -314,7 +317,7 @@ LAB_processCMD_ID:
         // iVar5 = DAT_000061b0;
       } else {
         // puVar6 = PTR_s_ERROR:_Unknown_Device_Sent_STATU_000061c0;
-        // if (bVar2 != DANAddresses::IRC) goto switchD_0000622e_default;
+        // if (bVar2 != (int)DANAddresses::IRC) goto switchD_0000622e_default;
         // PrintWithMillisLog(PTR_s_IRC_STATUS:_FW:_%d_Operating_Sta_000061b4,RXBuffer.Payload[0],RXBuffer.Payload[1]);
         // PrintWithMillisLog(PTR_s_Address:_%02X_Diagnostics_Code:_%_0000619c,RXBuffer.Payload[2],RXBuffer.Payload[3]);
         bVar10 = RXBuffer.Payload[0];
@@ -327,7 +330,7 @@ LAB_processCMD_ID:
     //(iVar5 + 0x82) = 1;
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::RECEIVE_FILE) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::RECEIVE_FILE) {
     PrintWithMillisLog("> RECEIVE FILE");
     ExpectedLength = RXBuffer.Payload[0];
     bVar10 = RXBuffer.LEN_H;
@@ -339,7 +342,7 @@ LAB_processCMD_ID:
     // FUN_00008194(acStack_118,uVar11,RXBuffer.Payload + ExpectedLength + 1);
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::SEND_FILE_REQUEST) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::SEND_FILE_REQUEST) {
     PrintWithMillisLog("> SEND FILE REQUEST");
     bVar10 = RXBuffer.MsgSrc;
     if (1 < ExpectedLength) {
@@ -351,7 +354,7 @@ LAB_processCMD_ID:
     // puVar6 = PTR_s_ERROR:_Incorrect_payload_length_f_000061d0;
     goto LAB_00006034;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::LIST_FILES_REQUEST) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::LIST_FILES_REQUEST) {
     PrintWithMillisLog("> LIST FILES REQUEST");
     bVar2 = RXBuffer.MsgSrc;
     if (ExpectedLength == 1) {
@@ -366,7 +369,7 @@ LAB_processCMD_ID:
     // Print(Thumb)(puVar6);
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::FORMAT_FILESYSTEM) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::FORMAT_FILESYSTEM) {
     PrintWithMillisLog("> FORMAT FILESYSTEM");
     if (ExpectedLength == 1) {
       // FUN_00008240();
@@ -376,31 +379,38 @@ LAB_processCMD_ID:
     bVar2 = RXBuffer.MsgSrc;
     goto LAB_00006028;
   }
-  
+
   puVar6 = "> LED PARAMETERS:";
-  if (((
-    (RXBuffer.CmdID == DANCommandIDs::SET_LED_PARAMS) || 
-    (puVar6 = "> LED COLOR", RXBuffer.CmdID == DANCommandIDs::SET_LED_COLOR_INDEX)) || 
-    (puVar6 = "> LED BRIGHTNESS", RXBuffer.CmdID == DANCommandIDs::SET_LED_BRIGHTNESS)) ||
-    (((puVar6 = "> LED CUSTOM COLOR", RXBuffer.CmdID == DANCommandIDs::SET_LED_CUSTOM_COLOR ||
-    (puVar6 = "> LED ANIMATION ADVANCE", RXBuffer.CmdID == DANCommandIDs::LED_COLOR_ADVANCE)) ||
-    ((puVar6 = "> LED MODE:", RXBuffer.CmdID == DANCommandIDs::SET_LED_RACE_MODE ||
-    ((puVar6 = "> LED ANIMATION PARAMETERS:", RXBuffer.CmdID == DANCommandIDs::SET_LED_ANIM_PARAMS ||
-    (puVar6 = "> LED ANIMATION INDEX:", RXBuffer.CmdID == DANCommandIDs::SET_LED_ANIMATION_INDEX))))))))
-  {
+  if ((((RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_LED_PARAMS) ||
+        (puVar6 = "> LED COLOR",
+         RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_LED_COLOR_INDEX)) ||
+       (puVar6 = "> LED BRIGHTNESS",
+        RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_LED_BRIGHTNESS)) ||
+      (((puVar6 = "> LED CUSTOM COLOR",
+         RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_LED_CUSTOM_COLOR ||
+             (puVar6 = "> LED ANIMATION ADVANCE",
+              RXBuffer.CmdID == (uint8_t)DANCommandIDs::LED_COLOR_ADVANCE)) ||
+        ((puVar6 = "> LED MODE:",
+          RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_LED_RACE_MODE ||
+              ((puVar6 = "> LED ANIMATION PARAMETERS:",
+                RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_LED_ANIM_PARAMS ||
+                    (puVar6 = "> LED ANIMATION INDEX:",
+                     RXBuffer.CmdID ==
+                         (uint8_t)
+                             DANCommandIDs::SET_LED_ANIMATION_INDEX)))))))) {
     PrintWithMillisLog(puVar6);
-    RXBuffer.MsgDest = *pbVar1 & 0xf ^ 0x50;
-    //sendDANmsgToLEDC(RXBuffer,ExpectedLength);
+    // RXBuffer.MsgDest = *pbVar1 & 0xf ^ 0x50;
+    // sendDANmsgToLEDC(RXBuffer,ExpectedLength);
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::RESET) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::RESET) {
     PrintWithMillisLog("> RESET");
     // FUN_00005b74(RXBuffer.MsgSrc,0,RXBuffer.MsgSrc,0xc1);
     delay(0xfa);
     // FUN_0000a8c8();
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::OSD_DISPLAY_REQUEST) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::OSD_DISPLAY_REQUEST) {
     PrintWithMillisLog("> OSD DISPLAY REQUEST");
     bVar10 = RXBuffer.MsgSrc;
     if (RXBuffer.Payload[0] < 0x14) {
@@ -414,7 +424,7 @@ LAB_processCMD_ID:
     // puVar6 = PTR_s_ERROR:_Incorrect_payload_length_f_00006208;
     goto LAB_00006034;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::OSD_CONTROL) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::OSD_CONTROL) {
     PrintWithMillisLog("> OSD CONTROL");
     bVar10 = RXBuffer.MsgSrc;
     if (ExpectedLength == 1) {
@@ -426,8 +436,8 @@ LAB_processCMD_ID:
     // puVar6 = PTR_s_ERROR:_Incorrect_payload_length_f_00006210;
     return;
   }
-  if (RXBuffer.CmdID == DANCommandIDs::CAM_CONTROL) {
-    if (RXBuffer.CmdID == DANCommandIDs::FC_CONTROL) {
+  if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::CAM_CONTROL) {
+    if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::FC_CONTROL) {
       PrintWithMillisLog("> FC CONTROL");
       bVar10 = RXBuffer.LEN_H;
       bVar2 = RXBuffer.LEN_L;
@@ -436,14 +446,14 @@ LAB_processCMD_ID:
       // FUN_00006cac();
       return;
     }
-    if (RXBuffer.CmdID == DANCommandIDs::SET_HIGH_POWER_DRIVE) {
+    if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_HIGH_POWER_DRIVE) {
       PrintWithMillisLog("> SETTING HIGH POWER DRIVE");
       SetHPDriveTime(RXBuffer.Payload[0]);
       return;
     }
-    if (RXBuffer.CmdID == DANCommandIDs::SET_IR_MODE) {
+    if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::SET_IR_MODE) {
       // puVar6 = PTR_s_ERROR:_NO_PACKET_HANDLER_DEFINED_0000643c;
-      if (RXBuffer.CmdID == DANCommandIDs::CFG_UPDATE)
+      if (RXBuffer.CmdID == (uint8_t)DANCommandIDs::CFG_UPDATE)
         return;
       // goto switchD_0000622e_default;
     }
@@ -558,5 +568,131 @@ switchD_0000622e_default:
     PrintWithMillis(puVar6,bVar10);
   }
     */
+  return;
+}
+
+bool DANMsger::PrepDanMsgForSending(size_t msgLength, uint8_t src, uint8_t dest, uint8_t CmdID, byte* payload) {
+  DANPacket* param_2 = new DANPacket();
+                        
+  if (TXBuffer == nullptr) {
+    TXBuffer = new DANPacket();
+    if (msgLength < 2081) {
+      TXBuffer = param_2;
+      MsgPayloadLength = msgLength;
+      param_2->CmdID = CmdID;
+      param_2->MsgDest = dest;
+      param_2->MsgSrc = src;
+      memcpy(param_2->Payload, payload, msgLength);
+      CurrentTXMsgState = 0;
+      SetCRCAndLen(msgLength);
+      return 1;
+    }
+    free(param_2);
+    TXBuffer = nullptr;
+    return 0;
+  }
+  free(param_2);
+  TXBuffer = nullptr;
+  return 0;
+}
+
+void DANMsger::SetCRCAndLen(int MsgLength) {
+  TXBuffer->LEN_H = (uint8_t)MsgLength;
+  TXBuffer->LEN_L = (uint8_t)((uint)MsgLength >> 8);
+  uint16_t CRC = calculateCRC((char*)&TXBuffer, MsgLength);
+  TXBuffer->CRC_H = (uint8_t)((uint)CRC >> 8);
+  TXBuffer->CRC_L = (uint8_t)(CRC & 0xff);
+}
+
+void DANMsger::SendPendingDanMsgs(){ 
+  uint8_t ByteToSend;
+  uint8_t StateToMoveTo;
+  uint8_t CurrentState;
+  
+  StateToMoveTo = 0;
+  while( true ) {
+    if (CurrentTXMsgState == 8) {
+      CurrentTXMsgState = 7;
+      CurrentPayloadMsgIDX = CurrentPayloadMsgIDX + 1;
+    }
+    CurrentState = CurrentTXMsgState;
+    switch(CurrentState & 0x7f) {
+    case 0:
+      if (TXBuffer == nullptr) {
+        return;
+      }
+      CurrentPayloadMsgIDX = 0;
+      if ((int)((uint)config << 0x1f) < 0) {
+        StateToMoveTo = 1;
+      }
+      else {
+        StateToMoveTo = 2;
+      }
+      CurrentTXMsgState = StateToMoveTo;
+      return;
+    case 1:
+      ByteToSend = 0xba;
+      StateToMoveTo = 2;
+      break;
+    case 2:
+      StateToMoveTo = 3;
+      ByteToSend = TXBuffer->LEN_L;
+      break;
+    case 3:
+      StateToMoveTo = 4;
+      ByteToSend = TXBuffer->LEN_H;
+      break;
+    case 4:
+      StateToMoveTo = 5;
+      ByteToSend = TXBuffer->CmdID;
+      break;
+    case 5:
+      StateToMoveTo = 6;
+      ByteToSend = TXBuffer->MsgDest;
+      break;
+    case 6:
+      if (CurrentPayloadMsgIDX == MsgPayloadLength) {
+        StateToMoveTo = 9;
+      }
+      else {
+        StateToMoveTo = 7;
+      }
+      ByteToSend = TXBuffer->MsgSrc;
+      break;
+    case 7:
+      if (CurrentPayloadMsgIDX + 1 < (uint)MsgPayloadLength) {
+        StateToMoveTo = 8;
+      }
+      else {
+        StateToMoveTo = 9;
+      }
+      ByteToSend = TXBuffer->Payload[CurrentPayloadMsgIDX];
+      break;
+    case 9:
+      StateToMoveTo = 10;
+      ByteToSend = TXBuffer->CRC_H;
+      break;
+    case 10:
+      StateToMoveTo = 0xb;
+      ByteToSend = TXBuffer->CRC_L;
+      break;
+    case 0xb:
+      free(TXBuffer);
+      TXBuffer = nullptr;
+      return;
+    }
+    if ((int)((uint)config << 0x1f) < 0) {
+      if ((int)((uint)CurrentState << 0x18) < 0) {
+        CurrentTXMsgState = CurrentState & 0x7f;
+      }
+      else if ((CurrentState != 1) && ((ByteToSend == 0xba || (ByteToSend == 0xda)))) {
+        StateToMoveTo = CurrentState | 0x80;
+        ByteToSend = 0xda;
+      }
+    }
+    if (_serial) break;
+    _serial.write(ByteToSend);
+    CurrentTXMsgState = StateToMoveTo;
+  }
   return;
 }

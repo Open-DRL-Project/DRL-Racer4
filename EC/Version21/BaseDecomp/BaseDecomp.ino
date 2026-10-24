@@ -122,9 +122,13 @@ void SERCOM4_1_Handler() { SerialCom4.IrqHandler(); }
 void SERCOM4_2_Handler() { SerialCom4.IrqHandler(); }
 void SERCOM4_3_Handler() { SerialCom4.IrqHandler(); }
 
-DANMsger LEDC(SerialCom0);
+DANMsger LEDCDANMsger(SerialCom0);
 
 DANMsger CTMDANMsger(SerialCom4);
+
+DANMsger MMCDANMsger(SerialCom1);
+
+DANMsger IRCDANMsger(SerialCom0);
 
 // Globals:
 // OSD ----------------------------------
@@ -197,10 +201,12 @@ int g_IRCVersion;
 int g_LEDCVersion;
 int g_MCCVersion;
 
-
 // FC polls
 int g_PollFCARM;
 int g_PollRcForColor;
+
+// DAN
+uint8_t g_currentDANAddress = 0x40;
 
 void PrintWithMillisLog(String input) {
   Serial.print(millis());
@@ -268,7 +274,6 @@ void FUN_00009a38() {
   pinMode(2, OUTPUT);
   pinMode(16, OUTPUT);
   digitalWrite(16, LOW);
-
   // FUN_00005760();
   // CreateDANMsgers(CTM,0,0,uVar1,WriteSERCOM4,1);
   // CreateDANMsgers(LEDC,0,0,uVar1,WriteSERCOM0,1);
@@ -638,6 +643,26 @@ void setup() {
   // CameraInit();
   DiagnosticsInit(); // Done
   ECInfo();          // Done
+}
+
+int SetChannels(uint Channel) {
+  // undefined1 *puVar1;
+  char cVar2;
+
+  // puVar1 = DAT_0000a7ac;
+  if (Channel < 9) {
+    if (Channel + 1 != (uint)g_VTXChannelNumber) {
+      g_VTXChannelNumber = (byte)(Channel + 1);
+      //*puVar1 = 1;
+      //*DAT_0000a7b0 = 0;
+      g_currentDANAddress = Channel ^ 0x40;
+      cVar2 = '\0';
+      goto LAB_0000a7a4;
+    }
+  }
+  cVar2 = -1;
+LAB_0000a7a4:
+  return (int)cVar2;
 }
 
 void DisableIRC() {
@@ -1417,64 +1442,53 @@ void DanUPDATE() {
       DanStatusRequest(*DAT_00009f0c & 0xf | 0x60);
     }
   }
-  iVar11 = available(SERCOM0);
-  if (iVar11 == 0)
-    goto switchD_00009e02_default;
-  uVar9 = readBytes(SERCOM0);
-  if (uVar9 == 0xffffffff) {
-    return -1;
-  }
-  switch (*DAT_00009f38) {
-  case 0:
-    Print(Thumb)(PTR_s_Serial : _UART3_ - _LEDC_00009f3c);
-    DanObject = LEDCDANMsger;
-    iVar11 = DAT_00009f10;
-    uVar10 = 0;
-    *(undefined1 *)(DAT_00009f10 + 65) = 0;
-    goto LAB_00009e4a;
-  case 1:
-    if (*DAT_00009f18 < 2) {
-      Print(Thumb)(PTR_s_Serial : _UART3_ - _RUNCAM_00009f44);
-      uVar10 = DAT_00009f48;
-      *(undefined1 *)(DAT_00009f1c + 0x41) = 0;
-      FUN_00013fae(uVar10, uVar9 & 0xff);
+  */
+  if (SerialCom0.available() > 0) {
+    uint32_t msgChar = SerialCom0.read();
+    if (msgChar == 0xffffffff) {
+      return;
     }
-    break;
-  case 2:
-    Print(Thumb)(PTR_s_Serial : _UART3_ - _IRC_00009f4c);
-    DanObject = IRCDANMsger;
-    iVar11 = 0;
-    *(undefined1 *)(iVar7 + 0x41) = 0;
-    uVar10 = extraout_r2;
-  LAB_00009e4a:
-    GetDanMsgRX(DanObject, uVar9 & 0xff, uVar10, iVar11);
-    break;
-  case 3:
-    Printl(DAT_00009f54, PTR_s_Serial : _UART3_ - _TEST_00009f58);
+
+    switch (g_CurrentMuxSet) {
+    case 0:
+      LEDCDANMsger.GetAndProccessDanMsgRX(msgChar & 0xff);
+    case 1:
+      /*
+        if (*DAT_00009f18 < 2) {
+          Print(Thumb)(PTR_s_Serial : _UART3_ - _RUNCAM_00009f44);
+          uVar10 = DAT_00009f48;
+          *(undefined1 *)(DAT_00009f1c + 0x41) = 0;
+          FUN_00013fae(uVar10, uVar9 & 0xff);
+        }*/
+      break;
+    case 2:
+      IRCDANMsger.GetAndProccessDanMsgRX(msgChar & 0xff);
+      break;
+    case 3:
+      // Printl(DAT_00009f54, PTR_s_Serial : _UART3_ - _TEST_00009f58);
+      break;
+    }
   }
-switchD_00009e02_default:
-*/
-  if (SerialCom4.available()) {
+  if (SerialCom4.available() > 0) {
     uint32_t msgChar = SerialCom4.read();
     if (msgChar == 0xffffffff) {
       return;
     }
     CTMDANMsger.GetAndProccessDanMsgRX(msgChar & 0xff);
   }
-  /*
-  iVar7 = available(SERCOM1);
-  if (iVar7 != 0) {
-    uVar9 = readBytes(SERCOM1);
-    if (uVar9 + 1 == 0) {
-      return -1;
+  if (SerialCom1.available() > 0) {
+    uint32_t msgChar = SerialCom1.read();
+    if (msgChar == 0xffffffff) {
+      return;
     }
-    *(undefined1 *)(iVar8 + 0x41) = 0;
-    GetDanMsgRX(MMCDANMsger, uVar9 & 0xff, uVar9 + 1, 0);
+    MMCDANMsger.GetAndProccessDanMsgRX(msgChar & 0xff);
   }
-  SendPendingDanMsgs(CTMDANMsger);
-  SendPendingDanMsgs(MMCDANMsger);
-  SendPendingDanMsgs(LEDCDANMsger);
-  SendPendingDanMsgs(IRCDANMsger);
+  
+  CTMDANMsger.SendPendingDanMsgs();
+  MMCDANMsger.SendPendingDanMsgs();
+  LEDCDANMsger.SendPendingDanMsgs();
+  IRCDANMsger.SendPendingDanMsgs();
+  /*
   iVar8 = available(SERCOM3);
   iVar7 = 0;
   if (iVar8 != 0) {
