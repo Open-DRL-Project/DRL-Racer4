@@ -1,0 +1,110 @@
+(footprint "Button"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(property "Reference" "SW1"
+		(at 0 0 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "93b9be55-bbc1-4a14-b31a-9791b27e5752")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Value" "USER button"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "d1d617d7-bce5-434d-84d2-f1cb520bc843")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "5dfbab47-6ad2-4151-8378-c8c261763811")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "7e6f32a1-c6d5-40d4-87a5-8b26ef48e4bf")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr exclude_from_pos_files exclude_from_bom)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -4.083771 0.972997)
+		(end 2.646614 -3.258734)
+		(stroke
+			(width 0.15)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "4a0c81e7-4432-46f5-a084-52c61bac10c8")
+	)
+	(fp_line
+		(start -2.646615 3.258732)
+		(end -4.083771 0.972997)
+		(stroke
+			(width 0.15)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "9502017e-dcdd-49c6-bc9e-24952d579257")
+	)
+	(fp_line
+		(start 2.646614 -3.258734)
+		(end 4.08377 -0.972999)
+		(stroke
+			(width 0.15)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "6a413488-471a-4be4-8fb0-68143ba5bec3")
+	)
+	(fp_line
+		(start 4.08377 -0.972999)
+		(end -2.646615 3.258732)
+		(stroke
+			(width 0.15)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "05deb077-cb80-490b-bc47-d1bb50d6e22e")
+	)
+	(pad "1" thru_hole rect
+		(at 2.222325 -1.397288 32.16)
+		(size 1.8 1.8)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(thermal_bridge_angle 45)
+		(uuid "eeeab9df-c231-4818-89f7-890d7c68c770")
+	)
+	(pad "2" thru_hole circle
+		(at -2.222325 1.397287 32.16)
+		(size 1.8 1.8)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "a12c6e4c-d108-4def-b2f2-5032a7538e8c")
+	)
+	(embedded_fonts no)
+)

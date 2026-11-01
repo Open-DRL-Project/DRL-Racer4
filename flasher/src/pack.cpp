@@ -75,7 +75,7 @@ int main(int argc, char **argv)
                     list.push_back(h.at("known"));
             list.push_back(
                 known(read(r / "baselines/ec_v21.bin"), "Original EC v21", oldMask, old));
-            list.push_back(known(read(out / ecImage["file"].get<std::string>()), "Unified EC v25",
+            list.push_back(known(read(out / ecImage["file"].get<std::string>()), "DRL " DRL_VERSION " EC",
                                  ecMask, same));
             cat["profiles"]["EC_" + target] = {{"kind", "ec"}, {"image", ecImage}, {"known", list}};
             Json fonts = Json::array();
@@ -131,7 +131,7 @@ int main(int argc, char **argv)
                 list.push_back(k);
             }
             auto current = known(read(out / entry["file"].get<std::string>()),
-                                 "Unified LEDC v22 " + variant, sameLEDMask, journalLED);
+                                 "DRL " DRL_VERSION " LEDC " + variant, sameLEDMask, journalLED);
             list.push_back(current);
             for (auto &h : history)
                 if (h.at("profile") == "LED_" + variant)

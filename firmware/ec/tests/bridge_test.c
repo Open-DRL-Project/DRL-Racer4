@@ -1,3 +1,5 @@
+void sa_request(const unsigned char *p, unsigned n) { (void)p; (void)n; }
+void receiver_request(const unsigned char *p, unsigned n) { (void)p; (void)n; }
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>

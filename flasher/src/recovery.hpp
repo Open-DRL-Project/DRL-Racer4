@@ -92,10 +92,12 @@ inline Backup loadBackup(const fs::path &file, const Json &catalog)
     }
     else
     {
-        identify(backup.image, backup.profile);
         require(backup.image.size() == 0x80000, "Wrong backup size.");
         if (backup.profile.at("kind") == "led")
-            require(detectLED(backup.image, catalog) == backup.key, "Backup wiring differs.");
+        {
+            auto wiring = detectLED(backup.image, catalog, true);
+            require(wiring.empty() || wiring == backup.key, "Backup wiring differs.");
+        }
     }
     if (backup.profile.at("kind") == "ec")
     {
@@ -133,9 +135,12 @@ inline Bytes restoreImage(const Bytes &current, const Backup &backup, const Json
     auto restored = backup.image;
     if (backup.profile.at("kind") != "fc")
     {
-        identify(current, catalog.at("profiles").at(connectedProfile));
         if (backup.profile.at("kind") == "led")
-            require(detectLED(current, catalog) == backup.key, "Connected LEDC wiring differs.");
+        {
+            auto wiring = detectLED(current, catalog, true);
+            require(wiring.empty() || wiring == backup.key,
+                    "This firmware is not in the build's compatibility list. Backup saved; nothing written.");
+        }
         // UF2 cannot replace the bootloader. Keep the one already installed.
         std::copy_n(current.begin(), 0x4000, restored.begin());
     }

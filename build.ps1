@@ -159,6 +159,18 @@ function Build-Firmware {
         '-o', "$TestDirectory/ec_bridge.exe"
     )
     Invoke-Tool "$TestDirectory/ec_bridge.exe" @()
+    Invoke-Tool "$Msys/ucrt64/bin/gcc.exe" @(
+        '-std=c11', '-Wall', '-Wextra', '-Werror', '-static',
+        "-I$Root/firmware/ec/src", "$Root/firmware/ec/tests/smartaudio_test.c",
+        '-o', "$TestDirectory/ec_smartaudio.exe"
+    )
+    Invoke-Tool "$TestDirectory/ec_smartaudio.exe" @()
+    Invoke-Tool "$Msys/ucrt64/bin/gcc.exe" @(
+        '-std=c11', '-Wall', '-Wextra', '-Werror', '-static',
+        "-I$Root/firmware/ec/src", "$Root/firmware/ec/tests/receiver_tx_test.c",
+        '-o', "$TestDirectory/ec_receiver_tx.exe"
+    )
+    Invoke-Tool "$TestDirectory/ec_receiver_tx.exe" @()
     foreach ($Board in @('RACER4S', 'RACER4F4')) {
         Invoke-Tool "$Msys/usr/bin/make.exe" @("TARGET=$Board", 'UNAME=MINGW64', "ARM_SDK_DIR=$($Arm.Replace('\', '/'))", '-j4') $Source
     }
@@ -274,6 +286,9 @@ function Build-Flasher {
         Invoke-Tool "$Tools/g++.exe" ($Flags + @("$Source/$($Program[1])", '-lbcrypt', '-o', "$Destination/$($Program[0]).exe"))
     }
     Invoke-Tool "$Destination/pack.exe" @("$Root/firmware", "$Destination/builds/local")
+    Get-ChildItem -LiteralPath "$Source/releases" -Filter '*.zip' | ForEach-Object {
+        Expand-Archive -LiteralPath $_.FullName -DestinationPath "$Destination/builds/$($_.BaseName)" -Force
+    }
     Invoke-Tool "$Destination/tests.exe" @("$Root/firmware", "$Destination/builds/local")
     Invoke-Tool "$Tools/g++.exe" ($Flags + @("$Source/tests/recovery_tests.cpp", '-lbcrypt', '-o', "$Destination/recovery_tests.exe"))
     Invoke-Tool "$Destination/recovery_tests.exe" @("$Root/firmware", "$Destination/builds/local")

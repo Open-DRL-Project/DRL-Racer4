@@ -1,0 +1,4 @@
+(version 1)
+(rule "Via to other-net copper clearance"
+  (condition "A.Type == 'Via' || B.Type == 'Via'")
+  (constraint clearance (min 0.20mm)))

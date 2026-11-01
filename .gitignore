@@ -8,3 +8,4 @@ firmware/ghidra/*.lock*
 firmware/ghidra/DRL.rep/user/
 firmware/ghidra/**/~index.bak
 firmware/ghidra/**/~journal.bak
+hardware/**/*.kicad_prl

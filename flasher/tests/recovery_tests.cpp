@@ -133,6 +133,13 @@ int main(int argc, char **argv)
                                      key == "LED_AB" ? "LED_C" : "LED_AB");
                     });
             }
+            if (profile.at("kind") != "fc")
+            {
+                current[0x9000] ^= 1;
+                auto restored = restoreImage(current, backup, catalog, key);
+                assert(std::equal(restored.begin() + 0x4000, restored.end(),
+                                  before.begin() + 0x4000));
+            }
             before[0x9000] ^= 1;
             write(temporary / "before.bin", before);
             rejects([&] { loadBackup(temporary / "before.bin", catalog); });
@@ -155,6 +162,18 @@ int main(int argc, char **argv)
         testBackup("LED_AB", "ledc_v20.bin");
         testBackup("LED_AB", "ledc_v22.bin");
         testBackup("LED_C", "ledc_v21.bin");
+        auto unknownLED = read(source / "baselines/ledc_v22.bin");
+        unknownLED[0x9000] ^= 1;
+        write(temporary / "before.bin", unknownLED);
+        jsonWrite(temporary / "report.json",
+                  {{"profile", "LED_AB"}, {"before_sha256", hash(unknownLED)}});
+        auto unknownBackup = loadBackup(temporary / "before.bin", catalog);
+        assert(unknownBackup.image == unknownLED);
+        rejects([&] { detectLED(unknownLED, catalog); });
+        rejects([&] {
+            restoreImage(read(source / "baselines/ledc_v21.bin"), unknownBackup,
+                         catalog, "LED_AB");
+        });
         auto otherFC = read(source / "baselines/fc_f4.bin");
         otherFC[0x9000] ^= 1;
         write(temporary / "before.bin", otherFC);

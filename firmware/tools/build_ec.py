@@ -53,6 +53,8 @@ for name in (
     "file_wait.c",
     "dan_hook.S",
     "control_forward.c",
+    "smartaudio.c",
+    "receiver_tx.c",
 ):
     obj = Path(name).stem + ".o"
     run("gcc", *flags, SOURCE / name, "-o", obj)
@@ -63,6 +65,7 @@ run(
     "-Wl,-T," + str(SOURCE / "bridge.ld"),
     "-Wl,--gc-sections",
     "-Wl,-u,dan_observe_entry",
+    "-Wl,-u,sa_irq",
     "-Wl,--defsym,memset=0x15cb5",
     "-o",
     "bridge.elf",
@@ -129,13 +132,20 @@ patch(
     bytes.fromhex("194600bf"),
     "ASCII glyph addresses",
 )
+# Reserve the serial bridge state before the heap and clear it at startup.
+for address in (0x12488, 0x19554):
+    patch(address, struct.pack("<I", 0x20013720), struct.pack("<I", 0x20014800), "Serial bridge RAM reservation")
+for address in (0x4138, 0x413c, 0x4140, 0x4144):
+    patch(address, base[address:address + 4], struct.pack("<I", symbols["sa_irq"] | 1), "CTM SmartAudio interrupt")
+patch(0x8708, base[0x8708:0x870c], bytes.fromhex("00207047"), "Retire CTM DAN sender")
+patch(0x8d70, base[0x8d70:0x8d74], bytes.fromhex("00207047"), "Retire CTM DAN byte output")
 out[0x60000 : 0x60000 + len(code)] = code
 assert out[:0x4000] == base[:0x4000]
 # Include complete changed erase sectors without touching settings or the bootloader.
 sectors = sorted(
     {address // 8192 * 8192 for address, (x, y) in enumerate(zip(base, out)) if x != y}
 )
-assert sectors == [0x4000, 0x8000, 0xA000, 0x60000], sectors
+assert sectors == [0x4000, 0x8000, 0xA000, 0x12000, 0x18000, 0x60000], sectors
 addresses = [address for s in sectors for address in range(s, s + 8192, 256)]
 uf2 = b"".join(
     struct.pack(

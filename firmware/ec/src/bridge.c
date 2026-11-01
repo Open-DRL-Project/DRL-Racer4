@@ -124,6 +124,16 @@ void bridge_process(const uint8_t *frame)
         return;
     }
     const uint8_t *payload = frame + 6;
+    if (payload[0] == 143 || payload[0] == 144) {
+        extern void receiver_request(const uint8_t *, unsigned);
+        receiver_request(payload, size);
+        return;
+    }
+    if (size && (payload[0] >= 140 && payload[0] <= 142)) {
+        extern void sa_request(const uint8_t *, unsigned);
+        sa_request(payload, size);
+        return;
+    }
     const uint8_t subcommand = payload[0];
     if (subcommand == 136) {
         extern void control_forward_request(const uint8_t *, unsigned);

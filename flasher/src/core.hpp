@@ -347,7 +347,7 @@ inline Json identify(const Bytes &before, const Json &profile)
     throw std::runtime_error(
         "This firmware is not in the build's compatibility list. Backup saved; nothing written.");
 }
-inline std::string detectLED(const Bytes &before, const Json &catalog)
+inline std::string detectLED(const Bytes &before, const Json &catalog, bool allowUnknown = false)
 {
     std::set<std::string> matches;
     for (auto &p : catalog.at("profiles").items())
@@ -359,6 +359,8 @@ inline std::string detectLED(const Bytes &before, const Json &catalog)
                 maskedHash(before, k.at("mask")) == k.at("hash"))
                 matches.insert(p.key());
     }
+    if (matches.empty() && allowUnknown)
+        return {};
     require(matches.size() == 1,
             matches.empty() ? "LEDC firmware not recognized. Backup saved; nothing written."
                             : "LEDC detection is ambiguous. Nothing written.");

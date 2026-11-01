@@ -57,14 +57,13 @@ Both targets use Betaflight 3.5.7 and MSP API 1.40. The Windows Configurator is 
 | Motor 3 | PB6 | PA3 |
 | Motor 4 | PB7 | PA2 |
 | Receiver | UART1, RX PA10, TX PA9 | UART1, RX PA10, TX PA9 |
-| SmartAudio | TX4, PA0 | TX3, PB10 |
 | EC connection | UART6, TX PC6, RX PC7 | UART6, TX PC6, RX PC7 |
 | Blackbox storage | microSD on SPI2, CS PB12 | SPI flash on SPI3, CS PB3 |
 | Battery voltage input | PC2 | PC3 |
 
-The motor outputs use ONESHOT125. Receiver configuration uses CRSF. Connect receiver TX to FC RX and receiver RX to FC TX. On the tested mezzanine adapter, the working receiver signal is on CH1. The separate SmartAudio pad needs a wire to the FC TX pad listed above.
+The motor outputs use ONESHOT125. Connect receiver TX to adapter RX and receiver RX to adapter TX. The receiver signal is on CH1. Telemetry is on EC PB13, which sends CRSF telemetry using TCC3 and DMA because its SERCOM pad cannot transmit UART data. SmartAudio is on EC PB12. The adapter TX and SA bridges must be connected.
 
-UART6 is reserved for the EC bridge. OSD, font programming and LED commands share this connection. SmartAudio runs directly on the FC.
+UART6 is reserved for the EC bridge. OSD, font programming, LED commands, SmartAudio and receiver telemetry share this connection.
 
 The F4 target retains the REVO UART1 inverter control on PC0 and PINIO1 on PC8. Its sensor orientation and motor resources differ from the F7 target. The F4 configuration leaves the accelerometer disabled.
 
