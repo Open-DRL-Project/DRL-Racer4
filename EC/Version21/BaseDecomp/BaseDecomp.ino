@@ -1,3 +1,5 @@
+#include "SdFat_Adafruit_Fork.h"
+#include <Adafruit_SPIFlash.h>
 #include <Arduino.h>
 #include <ArduinoECCX08.h>
 #include <SAMD_SafeFlashStorage.h>
@@ -16,6 +18,16 @@
 #define LED_PIN 48
 #define USER_BUTTON 11
 #define ADC_CS_PIN 9
+
+#define IMU_ACCEL_CS_PIN 52
+#define IMU_GYRO_CS_PIN 51
+
+#define F_LOG "/log.csv"
+#define F_CRASH_LOG "/crashlog.json"
+#define F_FCMCAL "FCMCalibration.txt"
+
+#define DOUBLE_TAP_MAGIC 0xf01669efUL
+#define BOOT_DOUBLE_TAP_ADDRESS (HSRAM_ADDR + HSRAM_SIZE - 4)
 
 // DAN MSGERS
 //  MAX MSG SIZE: 2080
@@ -130,6 +142,15 @@ DANMsger MMCDANMsger(SerialCom1);
 
 DANMsger IRCDANMsger(SerialCom0);
 
+Adafruit_FlashTransport_QSPI flashTransport(PIN_QSPI_SCK, PIN_QSPI_CS,
+                                            PIN_QSPI_IO0, PIN_QSPI_IO1,
+                                            PIN_QSPI_IO2, PIN_QSPI_IO3);
+
+Adafruit_SPIFlash flash(&flashTransport);
+
+FatVolume fatfs;
+File32 CurrentFile;
+
 // Globals:
 // OSD ----------------------------------
 Max7456 osd;
@@ -159,6 +180,27 @@ int g_TelemWhileDisarmed;
 int g_TelemUseFcValues;
 int g_lastTelemUpdate;
 int g_telemCycleIndex;
+float g_telemetryYawAttitude;
+float g_telemetryPitchAttitude;
+float g_telemetryRollAttitude;
+uint16_t g_telemetryRcChannelData[8];
+uint16_t g_telemetryMotorStates[4];
+
+// IMU
+float g_imuPitch;
+float g_imuRoll;
+float g_imuYaw;
+
+// ADC
+float g_adcAltitude;
+int g_adcVtxCurrentSense;
+int g_adcCtmCurrentSense;
+int g_adcVbatSense;
+int g_adcSpineCurrentSense;
+int g_adcArmLeftTopCurrent;
+int g_adcArmLeftBottomCurrent;
+int g_adcArmRightTopCurrent;
+int g_adcArmRightBottomCurrent;
 
 // Diagnostics
 int g_DiagnosticsStartUpTime;
@@ -208,9 +250,13 @@ int g_PollRcForColor;
 // DAN
 uint8_t g_currentDANAddress = 0x40;
 
+// Log Stuff
+bool g_logFileOpened;
+int g_FlashLogLastTick;
+
 void PrintWithMillisLog(String input) {
   Serial.print(millis());
-  Serial.print(": ");
+  Serial.print(F(": "));
   Serial.println(input);
 }
 
@@ -289,7 +335,7 @@ void SetStorageDefaults() {
   int varsSet = 0;
   StorageDefaultsSet.read(&varsSet);
   if (varsSet != 1) {
-    Serial.println("Storage: Setting Defaults ");
+    Serial.println(F("Storage: Setting Defaults "));
 
     int IRCUpdate = 20000;
     IRCUpdateRate.write(IRCUpdate);
@@ -355,23 +401,23 @@ void OSDInit() {
   if (g_OSDDisabled != 0)
     return;
 
-  Serial.print("OSD Update Rate: ");
+  Serial.print(F("OSD Update Rate: "));
   OSDupdateRate.read(&g_OSDUpdateRate);
   Serial.println(g_OSDUpdateRate);
 
-  Serial.print("OSD Debug Mode: ");
+  Serial.print(F("OSD Debug Mode: "));
   OSDDebugMode.read(&g_OSDDebugMode);
   Serial.println(g_OSDDebugMode);
 
-  Serial.print("OSD LiPo Voltage Offset: ");
+  Serial.print(F("OSD LiPo Voltage Offset: "));
   OSDLiPoOffset.read(&g_OSDLiPoOffset);
   Serial.println(g_OSDLiPoOffset);
 
-  Serial.print("OSD Display Diagnostics Warnings Override: ");
+  Serial.print(F("OSD Display Diagnostics Warnings Override: "));
   OSDDiagWarnOveride.read(&g_OSDDiagWarnOveride);
   Serial.println(g_OSDDiagWarnOveride);
 
-  Serial.print("OSD Display Volts: ");
+  Serial.print(F("OSD Display Volts: "));
   OSDDisplayVolts.read(&g_OSDDisplayVolts);
   Serial.println(g_OSDDisplayVolts);
 
@@ -382,7 +428,7 @@ void OSDInit() {
   digitalWrite(47, LOW);
   delay(20);
 
-  Serial.println("Initializing OSD...");
+  Serial.println(F("Initializing OSD..."));
   osd.init(OSD_CS);
 
   osd.DetectAndSetVideoType();
@@ -413,7 +459,7 @@ void OSDInit() {
     osd.activateOSD();
   }
 
-  Serial.println("OSD: Initialized");
+  Serial.println(F("OSD: Initialized"));
   osd.print("OPEN DRL PROJECT", 0, 6, 0, 0);
   delay(1000);
   osd.clearScreen();
@@ -480,7 +526,7 @@ void GetSerialNumber() {
   uint32_t w2 = *sn_word2;
   uint32_t w3 = *sn_word3;
 
-  Serial.print("System: Serial number: ");
+  Serial.print(F("System: Serial number: "));
 
   char buffer[35];
   sprintf(buffer, "%08X%08X%08X%08X", w0, w1, w2, w3);
@@ -488,13 +534,46 @@ void GetSerialNumber() {
   Serial.println(buffer);
 }
 
-// STUB
+void SetupLogHeaders() {
+  CurrentFile.println(
+      F("Time,adcVtxCurrentSense,adcCtmCurrentSense,adcVbatSense,"
+        "adcSpineCurrentSense,adcArmLeftTopCurrent,adcArmLeftBottomCurrent,"
+        "adcArmRightTopCurrent,adcArmRightBottomCurrent,telemetryMotorStates[0]"
+        ",telemetryMotorStates[1],telemetryMotorStates[2],telemetryMotorStates["
+        "3],telemetryYawAttitude,telemetryPitchAttitude,telemetryRollAttitude,"
+        "imuPitch,imuRoll,imuYaw,adcAltitude,telemetryRcChannelData[0],"
+        "telemetryRcChannelData[1],telemetryRcChannelData[2],"
+        "telemetryRcChannelData[3],telemetryRcChannelData[4],telemetryRcChan"));
+}
+
+// DONE (mostly)
 void FlashInit() {
-  /* DOESN'T WORK ON THE REAL DEAL, SO I'M NOT DOING IT FOR NOW
-  const int FLASH_MOSI = 41;
-  const int FLASH_MISO = 44;
-  const int FLASH_SCK  = 43;
-*/
+
+  if (!flash.begin()) {
+    Serial.println(F("ERROR, failed to initialize flash chip!"));
+    return;
+  } else {
+    Serial.print(F("Flash chip JEDEC ID: 0x"));
+    Serial.println(flash.getJEDECID(), HEX);
+  }
+
+  if (!fatfs.begin(&flash)) {
+    Serial.println(F("Error, failed to mount newly formatted filesystem!"));
+  }
+
+  Serial.println(F("Deleting old Logs"));
+
+  if (!fatfs.remove(F_LOG)) {
+    Serial.println(F("Filesystem: ERROR, couldn't delete log.csv file!"));
+  }
+
+  CurrentFile = fatfs.open(F_LOG, FILE_WRITE);
+  if (!CurrentFile) {
+    Serial.println(F("Error, failed to open " F_LOG " for writing!"));
+  } else {
+    Serial.println(F("Opened file " F_LOG " for writing/appending..."));
+    g_logFileOpened = true;
+  }
 }
 
 // DONE
@@ -504,7 +583,7 @@ void TelemetryInit() {
 
   TelemUpdateRate.read(&g_TelemUpdateRate);
 
-  Serial.print("Telemetry: Initialized with update rate ");
+  Serial.print(F("Telemetry: Initialized with update rate "));
   Serial.println(g_TelemUpdateRate);
 
   TelemBlackboxMode.read(&g_TelemBlackboxMode);
@@ -515,113 +594,113 @@ void TelemetryInit() {
 // DONE
 void IRInit() {
   IRCUpdateRate.read(&g_IRCUpdateRate);
-  Serial.println("IR: Initialized.");
+  Serial.println(F("IR: Initialized."));
 }
 
 // DONE
 void PrintDroneMode() {
-  Serial.print("System State: ");
+  Serial.print(F("System State: "));
   if (g_DroneMode == DISARMED) {
-    Serial.println("DISARMED");
+    Serial.println(F("DISARMED"));
   } else if (g_DroneMode == ARMED) {
-    Serial.println("ARMED");
+    Serial.println(F("ARMED"));
   } else if (g_DroneMode == KILLED) {
-    Serial.println("KILLED");
+    Serial.println(F("KILLED"));
   } else if (g_DroneMode == REVIVED) {
-    Serial.println("REVIVED");
+    Serial.println(F("REVIVED"));
   } else if (g_DroneMode == FAILSAFED) {
-    Serial.println("FAILSAFED");
+    Serial.println(F("FAILSAFED"));
   } else {
-    Serial.println("UNDEFINED");
+    Serial.println(F("UNDEFINED"));
   }
 }
 
 // DONE
 void ECInfo() {
-  Serial.println("EC INFO>");
-  Serial.print("Firmware Version: ");
+  Serial.println(F("EC INFO>"));
+  Serial.print(F("Firmware Version: "));
   Serial.println(VERSION);
-  Serial.println("WARNING: EC INFO MODE: ENABLED");
-  Serial.println("WARNING: EC ERROR MODE: ENABLED");
-  Serial.println("WARNING: EC WARN MODE: ENABLED");
+  Serial.println(F("WARNING: EC INFO MODE: ENABLED"));
+  Serial.println(F("WARNING: EC ERROR MODE: ENABLED"));
+  Serial.println(F("WARNING: EC WARN MODE: ENABLED"));
   PrintDroneMode();
-  Serial.print("Current Channel: ");
+  Serial.print(F("Current Channel: "));
   Serial.println(g_VTXChannelNumber);
-  Serial.print("SD Disabled: ");
+  Serial.print(F("SD Disabled: "));
   Serial.println(g_SDDisabled);
-  Serial.print("Telemetry Disabled: ");
+  Serial.print(F("Telemetry Disabled: "));
   Serial.println(g_TelemDisabled);
-  Serial.print("OSD Disabled: ");
+  Serial.print(F("OSD Disabled: "));
   Serial.println(g_OSDDisabled);
-  Serial.print("IR Disabled: ");
+  Serial.print(F("IR Disabled: "));
   Serial.println(g_IRCDisabled);
 
-  Serial.println("");
+  Serial.println(F(""));
 
   OSDupdateRate.read(&g_OSDUpdateRate);
   OSDDebugMode.read(&g_OSDDebugMode);
-  Serial.print("OSD Update Rate: ");
+  Serial.print(F("OSD Update Rate: "));
   Serial.println(g_OSDUpdateRate);
-  Serial.print("OSD Debug Mode: ");
+  Serial.print(F("OSD Debug Mode: "));
   Serial.println(g_OSDDebugMode);
 
-  Serial.println("");
+  Serial.println(F(""));
 
-  Serial.print("Telemetry Update Rate: ");
+  Serial.print(F("Telemetry Update Rate: "));
   Serial.println(g_TelemUpdateRate);
-  Serial.print("Telemetry Blackbox Mode: ");
+  Serial.print(F("Telemetry Blackbox Mode: "));
   Serial.println(g_TelemBlackboxMode);
 
-  Serial.println("");
+  Serial.println(F(""));
 
-  Serial.print("Poll FC Arm: ");
+  Serial.print(F("Poll FC Arm: "));
   Serial.println(g_PollFCARM);
 
-  Serial.println("");
+  Serial.println(F(""));
 
   EcBlackbox.read(&g_ECBlackBoxMode);
   SystemOverrideChannel.read(&g_SystemOverrideChannel);
 
-  Serial.print("EC Blackbox: ");
+  Serial.print(F("EC Blackbox: "));
   Serial.println(g_ECBlackBoxMode);
-  Serial.print("System Override Channel: ");
+  Serial.print(F("System Override Channel: "));
   Serial.println(g_SystemOverrideChannel);
-  Serial.print("IR Controller Channel Update Rate: ");
+  Serial.print(F("IR Controller Channel Update Rate: "));
   Serial.println(g_IRCUpdateRate);
-  Serial.print("AIRR Mode: ");
+  Serial.print(F("AIRR Mode: "));
   Serial.println(g_AirrMode);
 
-  Serial.println("");
+  Serial.println(F(""));
 
-  Serial.println("<EC INFO");
+  Serial.println(F("<EC INFO"));
 }
 
 // DONE
 void DiagnosticsInit() {
   g_DiagnosticsStartUpTime = millis();
-  Serial.println("Diagnostics: Initialized");
+  Serial.println(F("Diagnostics: Initialized"));
 }
 
 // STUB: NEEDS CONFIG
 void ECCX08Init() {
   if (!ECCX08.begin()) {
-    Serial.println("The ECC508/ECC608 is not connected");
+    Serial.println(F("The ECC508/ECC608 is not connected"));
     return;
   }
   if (!ECCX08.locked()) {
     /*
-    Serial.println("The ECC508/ECC608 is not locked, locking it now!");
+    Serial.println(F("The ECC508/ECC608 is not locked, locking it now!"));
     if (!ECCX08.writeConfiguration()) {
-      Serial.println("Writing ECCX08 configuration failed!");
+      Serial.println(F("Writing ECCX08 configuration failed!"));
       return;
     }
     if (!ECCX08.lock()) {
-      Serial.println("Locking ECCX08 configuration failed!");
+      Serial.println(F("Locking ECCX08 configuration failed!"));
       return;
     }
     */
 
-    Serial.println("ECCX08 locked successfully");
+    Serial.println(F("ECCX08 locked successfully"));
     // FUN_00015cdc(DAT_00009434);
     // GenerateSelfSignedCert();
   }
@@ -630,7 +709,7 @@ void ECCX08Init() {
 // STUB
 void setup() {
   FUN_00009a38(); // STUB
-  Serial.println("<EC STARTUP>");
+  Serial.println(F("<EC STARTUP>"));
   SetStorageDefaults(); // STUB
   FlashInit();          // STUB: FAIL/NOT DOING
   // ADCInit();
@@ -639,7 +718,7 @@ void setup() {
   TelemetryInit();   // Done
   IRInit();          // Done
   ECCX08Init();      // STUB
-  // FUN_00006d04();
+  // IMU_INIT();
   // CameraInit();
   DiagnosticsInit(); // Done
   ECInfo();          // Done
@@ -666,7 +745,7 @@ LAB_0000a7a4:
 }
 
 void DisableIRC() {
-  Serial.println("< IR DISABLE");
+  Serial.println(F("< IR DISABLE"));
   g_IRCDisabled = 1;
   return;
 }
@@ -773,6 +852,39 @@ void SetDiagWarnOveride(int overide) {
   OSDDiagWarnOveride.write(overide);
 }
 
+int sendDANmsgToLEDC(DANPacket *msg, int msgLength) {
+  char Success;
+  int CurrentTime;
+  int MsgSuccess;
+
+  MsgSuccess = SETUART3MUX(0);
+  if (MsgSuccess < 0) {
+    Success = -1;
+  } else {
+    CurrentTime = millis();
+    SerialCom0.write(0xba);
+    SerialCom0.write(0xba);
+    SerialCom0.write(0xba);
+    MsgSuccess = LEDCDANMsger.PrepDanMsgForSending(
+        msgLength, msg->MsgSrc, msg->MsgDest, msg->CmdID, msg->Payload);
+    if (MsgSuccess == 0) {
+    }
+    Success = 0;
+  }
+  return (int)Success;
+}
+
+void LEDColorAdvance(void) {
+  DANPacket msg;
+
+  memset(&msg, 0, 2087);
+  msg.CmdID = (uint8_t)DANCommandIDs::LED_COLOR_ADVANCE;
+  msg.MsgSrc = g_currentDANAddress;
+  msg.MsgDest = msg.MsgSrc & 15 ^ 0x50;
+  sendDANmsgToLEDC(&msg, 0);
+  return;
+}
+
 void SetDroneMode(int Mode) {
   if (!(Mode <= 5)) {
     return;
@@ -781,18 +893,18 @@ void SetDroneMode(int Mode) {
     if (g_DroneMode != ARMED && g_DroneMode != FAILSAFED) {
       return;
     }
-    PrintWithMillisLog("< SYSTEM DISARMED >");
+    PrintWithMillisLog(F("< SYSTEM DISARMED >"));
     // FUN_00006968(1);
     g_DroneMode = Mode;
   } else if (Mode == ARMED) {
     if (g_DroneMode != DISARMED) {
       return;
     }
-    PrintWithMillisLog("< SYSTEM ARMED >");
+    PrintWithMillisLog(F("< SYSTEM ARMED >"));
     // FUN_00006968(0);
     g_DroneMode = Mode;
   } else if (Mode == KILLED) {
-    PrintWithMillisLog("< SYSTEM KILLED >");
+    PrintWithMillisLog(F("< SYSTEM KILLED >"));
     // DAT_0000a8bc = 1;
     if (g_DroneMode != KILLED) {
       // FUN_00006968(2);
@@ -804,7 +916,7 @@ void SetDroneMode(int Mode) {
     //   return 0;
     // }
     // DAT_0000a8bc = 0;
-    PrintWithMillisLog("< SYSTEM REVIVED >");
+    PrintWithMillisLog(F("< SYSTEM REVIVED >"));
     ReviveSystem();
     // FUN_00006968(4);
     g_DroneMode = Mode;
@@ -812,7 +924,7 @@ void SetDroneMode(int Mode) {
     if (DISARMED < g_DroneMode - 1) {
       return;
     }
-    PrintWithMillisLog("< SYSTEM FAILSAFED >");
+    PrintWithMillisLog(F("< SYSTEM FAILSAFED >"));
     // FUN_00006968(3);
     FailsafeDrone();
     g_DroneMode = Mode;
@@ -829,6 +941,12 @@ void SetHPDriveTime(int time) {
       g_HPDriveTime = millis() + time;
     }
   }
+}
+
+void jumpToBootloader() {
+  unsigned long *a = (unsigned long *)BOOT_DOUBLE_TAP_ADDRESS;
+  *a = DOUBLE_TAP_MAGIC;
+  NVIC_SystemReset();
 }
 
 // STUB
@@ -974,6 +1092,10 @@ void RunCommands(char *CommandLineIN) {
 
     Serial.print(" Unknown EC parameter: ");
     Serial.println(arguments[1]);
+  } else if (0 == strcmp(arguments[0], "bootloader")) {
+    jumpToBootloader();
+  } else if (0 == strcmp(arguments[0], "reset")) {
+    NVIC_SystemReset();
   } else {
     // NEEDS THE REST HERE (TODO BEFORE: GET DAN MSGS WORKING)
   }
@@ -1037,7 +1159,7 @@ void UpdateDroneState() {
                       g_userButtonDownAt)) { // The time here needs to be
                                              // checked, I just guessed.
       g_userButtonDown = false;
-      // LEDColorAdvance();
+      LEDColorAdvance();
     }
   }
 
@@ -1070,7 +1192,7 @@ void UpdateDroneState() {
     }
   } else {
     if (CommandState == 0) {
-      Serial.print(">> ");
+      Serial.print(F(">> "));
     }
     g_CommandState = CommandState == 0;
   }
@@ -1114,7 +1236,7 @@ void DiagnosticsTimoutChecks() {
     int CurrentTime = millis();
     if (g_DiagnosticsPreChecktime <=
         (CurrentTime - g_LastDiagnosticsUpdateTime)) {
-      Serial.println("Diagnostics: Reached Pre-Check Time");
+      Serial.println(F("Diagnostics: Reached Pre-Check Time"));
       g_LastDiagnosticsUpdateTime = CurrentTime;
       /*
       iVar4 = FUN_000066c4(1,0);
@@ -1125,7 +1247,7 @@ void DiagnosticsTimoutChecks() {
     }
     if (g_DiagnosticsInitCheckTime <=
         (CurrentTime - g_DiagnosticsStartUpTime)) {
-      Serial.println("Diagnostics: Reached Initialization Check Time");
+      Serial.println(F("Diagnostics: Reached Initialization Check Time"));
       g_diagnosticsChecked = 1;
       g_DiagnosticsStartUpTime = CurrentTime;
       g_diagnosticsChecked = 1;
@@ -1151,7 +1273,7 @@ void UpdateOSD() {
   if ((((OSDDebugNumber != 1) && (g_DroneMode != ARMED)) &&
        (g_OSDNeedToDisplayWarnings != 0)) &&
       (g_OSDDiagWarnOveride == 0)) {
-    Serial.println("OSD: Displaying Warnings");
+    Serial.println(F("OSD: Displaying Warnings"));
     g_OSDNeedToDisplayWarnings = 0;
     memset(TextBuffer, 0, 20);
     /*
@@ -1212,7 +1334,6 @@ void UpdateOSD() {
       memset(TextBuffer, 0, 20);
       snprintf(TextBuffer, 20, "%s", g_RaceStatus);
       osd.print(TextBuffer, 0, 1, 0, 0);
-      // puVar6 = DAT_00008c90;
       memset(TextBuffer, 0, 20);
       snprintf(TextBuffer, 20, "%d    ",
                g_HeartBeatCount >> 1); // divides by 2 to get seconds
@@ -1221,55 +1342,52 @@ void UpdateOSD() {
       memset(TextBuffer,0,20);
       snprintf(TextBuffer,20,"%d    ",*DAT_00008c94);
       osd.print(TextBuffer,0,9,0,0);
-      memset(TextBuffer,0,20);
-      fVar12 = (float)VectorSignedToFloat((int)*DAT_00008c98,(byte)(in_fpscr >>
-      0x16) & 3); FloatToDouble(fVar12/ 10.0); snprintf(TextBuffer,20,"%.2f ");
-      osd.print(TextBuffer,0,8,0,0);
-      memset(TextBuffer,0,20);
-      fVar12 = (float)VectorSignedToFloat((int)*DAT_00008ca0,(byte)(in_fpscr >>
-      0x16) & 3); FloatToDouble(fVar12/ 10.0); snprintf(TextBuffer,20,"%.2f ");
-      osd.print(TextBuffer,0,7,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",(int)*DAT_00008ca4);
-      osd.print(TextBuffer,0,6,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%u    ",*puVar6);
-      osd.print(TextBuffer,0,2,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%u    ",puVar6[1]);
-      osd.print(TextBuffer,0,3,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%u    ",puVar6[2]);
-      osd.print(TextBuffer,0,4,0,0);
-      memset(TextBuffer,0,20);
-      puVar7 = DAT_00008cac;
-      snprintf(TextBuffer,20,"%d    ",puVar6[3]);
-      osd.print(TextBuffer,0,5,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",*puVar7);
-      osd.print(TextBuffer,6,11,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",puVar7[1]);
-      osd.print(TextBuffer,6,10,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",puVar7[2]);
-      osd.print(TextBuffer,6,9,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",puVar7[3]);
-      osd.print(TextBuffer,6,8,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",puVar7[4]);
-      osd.print(TextBuffer,6,7,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",puVar7[5]);
-      osd.print(TextBuffer,6,6,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",puVar7[6]);
-      osd.print(TextBuffer,6,5,0,0);
-      memset(TextBuffer,0,20);
-      snprintf(TextBuffer,20,"%d    ",puVar7[7]);
-      osd.print(TextBuffer,6,4,0,0);
       */
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%.2f", (double)g_telemetryRollAttitude);
+      osd.print(TextBuffer, 0, 8, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%.2f ", (double)g_telemetryPitchAttitude);
+      osd.print(TextBuffer, 0, 7, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", (int)g_telemetryYawAttitude);
+      osd.print(TextBuffer, 0, 6, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%u    ", g_telemetryMotorStates[0]);
+      osd.print(TextBuffer, 0, 2, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%u    ", g_telemetryMotorStates[1]);
+      osd.print(TextBuffer, 0, 3, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%u    ", g_telemetryMotorStates[2]);
+      osd.print(TextBuffer, 0, 4, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryMotorStates[3]);
+      osd.print(TextBuffer, 0, 5, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[0]);
+      osd.print(TextBuffer, 6, 11, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[1]);
+      osd.print(TextBuffer, 6, 10, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[2]);
+      osd.print(TextBuffer, 6, 9, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[3]);
+      osd.print(TextBuffer, 6, 8, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[4]);
+      osd.print(TextBuffer, 6, 7, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[5]);
+      osd.print(TextBuffer, 6, 6, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[6]);
+      osd.print(TextBuffer, 6, 5, 0, 0);
+      memset(TextBuffer, 0, 20);
+      snprintf(TextBuffer, 20, "%d    ", g_telemetryRcChannelData[7]);
+      osd.print(TextBuffer, 6, 4, 0, 0);
       memset(TextBuffer, 0, 20);
       snprintf(TextBuffer, 20, "%d    ", g_DeltaTime);
       osd.print(TextBuffer, 6, 2, 0, 0);
@@ -1322,6 +1440,24 @@ void UpdateOSD() {
   }
 }
 
+//This might be a shortcut? needs double checking
+void AskForTelemPacketByType(uint8_t Type) {
+  sendMSPRequest(Type);
+}
+
+
+void sendMSPRequest(uint8_t cmd) {
+  uint8_t size = 0;
+  uint8_t checksum = size ^ cmd;
+
+  Serial1.write('$');
+  Serial1.write('M');
+  Serial1.write('<');
+  Serial1.write(size);
+  Serial1.write(cmd);
+  Serial1.write(checksum);
+}
+
 // STUB
 void UpdateTelem() {
   if ((g_TelemDisabled != 0) ||
@@ -1331,7 +1467,7 @@ void UpdateTelem() {
   /*
   if ((59 < (millis() - g_LastCTMTelemUpdateTime)) && (DAT_0000cb24 != 0)) {
     g_LastCTMTelemUpdateTime = millis();
-    iVar3 = FUN_0000c8f8();
+    iVar3 = SendCTMUpdate();
   }
   */
   int CurrentTime = micros();
@@ -1366,7 +1502,7 @@ void UpdateTelem() {
     TelemPacketType = 0x6c;
   }
 LAB_0000cadc:
-  // SendTelemPacketByType(TelemPacketType);
+  AskForTelemPacketByType(TelemPacketType);
 LAB_0000cafc:
   if (g_telemCycleIndex < 5) {
     g_telemCycleIndex++;
@@ -1385,7 +1521,7 @@ void DanUPDATE() {
     if (*puVar3 <= (uint)(iVar7 - *DAT_00009f00)) {
       *DAT_00009f00 = iVar7;
       *pcVar1 = '\x01';
-      SendTelemPacketByType(3);
+      AskForTelemPacketByType(3);
     }
   }
   pbVar5 = DAT_00009f20;
@@ -1483,11 +1619,13 @@ void DanUPDATE() {
     }
     MMCDANMsger.GetAndProccessDanMsgRX(msgChar & 0xff);
   }
-  
   CTMDANMsger.SendPendingDanMsgs();
   MMCDANMsger.SendPendingDanMsgs();
+  
   LEDCDANMsger.SendPendingDanMsgs();
+  /*
   IRCDANMsger.SendPendingDanMsgs();
+  */
   /*
   iVar8 = available(SERCOM3);
   iVar7 = 0;
@@ -1513,6 +1651,91 @@ void DanUPDATE() {
   */
 }
 
+void PeridoicFlashLog() {
+
+  int CurrentTime = millis();
+  int LastTick = g_FlashLogLastTick;
+  if (CurrentTime < LastTick) {
+    return;
+  }
+  int Deltatime = CurrentTime - LastTick;
+  if (1000 <= Deltatime) {
+    g_FlashLogLastTick = CurrentTime;
+    if (g_ECBlackBoxMode != 0) {
+      if (!g_logFileOpened) {
+        CurrentFile = fatfs.open(F_LOG, FILE_WRITE);
+        if (CurrentFile) {
+          g_logFileOpened = true;
+        }
+      } else {
+        CurrentFile.print(millis());
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcVtxCurrentSense);
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcCtmCurrentSense);
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcVbatSense);
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcSpineCurrentSense);
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcArmLeftTopCurrent);
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcArmLeftBottomCurrent);
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcArmRightTopCurrent);
+        CurrentFile.print(',');
+        CurrentFile.print(g_adcArmRightBottomCurrent);
+        CurrentFile.print(',');
+
+        CurrentFile.print(g_telemetryMotorStates[0]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryMotorStates[1]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryMotorStates[2]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryMotorStates[3]);
+        CurrentFile.print(',');
+
+        CurrentFile.print((int)g_telemetryYawAttitude);
+        CurrentFile.print(',');
+        CurrentFile.print((int)g_telemetryPitchAttitude);
+        CurrentFile.print(',');
+        CurrentFile.print((int)g_telemetryRollAttitude);
+        CurrentFile.print(',');
+
+        CurrentFile.print((double)g_imuPitch);
+        CurrentFile.print(',');
+        CurrentFile.print((double)g_imuRoll);
+        CurrentFile.print(',');
+        CurrentFile.print((double)g_imuYaw);
+        CurrentFile.print(',');
+
+        CurrentFile.print(g_adcAltitude);
+        CurrentFile.print(',');
+
+        CurrentFile.print(g_telemetryRcChannelData[0]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryRcChannelData[1]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryRcChannelData[2]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryRcChannelData[3]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryRcChannelData[4]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryRcChannelData[5]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryRcChannelData[6]);
+        CurrentFile.print(',');
+        CurrentFile.print(g_telemetryRcChannelData[7]);
+        CurrentFile.print(',');
+        CurrentFile.print(' ');
+      }
+    }
+  }
+  return;
+}
+
 // STUB
 void loop() {
   UpdateDroneState(); // STUB
@@ -1522,6 +1745,7 @@ void loop() {
   // ADCUpdate();
   DanUPDATE();
   DiagnosticsTimoutChecks(); // STUB
-  // FUN_00007280();
-  // FUN_00007bc8();;
+  // IMU_UPDATE();
+  PeridoicFlashLog(); // DONE
+  ;
 }
